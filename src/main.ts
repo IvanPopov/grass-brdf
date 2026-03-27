@@ -8,6 +8,7 @@ import { LightRigVisual } from './lighting/LightRigVisual';
 import { createField } from './scene/Field';
 import { createGrid } from './scene/Grid';
 import { createFieldAnnotations, HeightAnnotation } from './scene/Annotations';
+import { Stands } from './scene/Stands';
 import { buildGui } from './ui/Gui';
 import { IlluminanceDebug } from './debug/IlluminanceDebug';
 
@@ -59,6 +60,10 @@ camera.position.set(0, 120, 180);
 createGrid(scene);
 const { fieldMat } = createField(scene);
 createFieldAnnotations(scene);
+
+const stands = new Stands();
+stands.build(fieldMat);
+scene.add(stands.group);
 
 // ── Dynamic objects ───────────────────────────────────────────────────────────
 const lightRig       = new LightRig();
@@ -124,7 +129,7 @@ function rebuild(): void {
   lightRig.build(params);
   lightRigVisual.build(lightRig.lights, params);
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
-  fieldMat.update(lightRig.lights, params.iesExponent);
+  fieldMat.update(lightRig.lights, params.iesExponent, params.beamAsymmetry);
   debug.iesExponent = params.iesExponent;
   debug.rebuild(lightRig.lights);
   debug.logReport(lightRig.lights);

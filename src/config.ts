@@ -37,6 +37,12 @@ export const DEFAULT_PARAMS = {
   // to overlap smoothly — otherwise hard-edged patches are clearly visible.
   penumbra:          0.30,    // soft-edge fraction of cone      [0–1]  (effective range 0.20–0.40)
 
+  // Asymmetric beam optics — simulates asymmetric TIR lenses or physical barn-door
+  // visors that real stadium fixtures use to prevent spill light onto stands.
+  // 0.0 = perfectly circular cone (large spill far into stands)
+  // 1.0 = heavily compressed elliptical beam (minimal stand spill)
+  beamAsymmetry:     0.60,    // vertical beam compression factor [0–1]
+
   // ── Beam efficiency ───────────────────────────────────────────────────
   // The rated luminous flux (fluxPerFixture) is the TOTAL output of the LED
   // source in all directions.  Only a fraction of that flux is concentrated into
