@@ -1,0 +1,113 @@
+---
+description: Project-wide coding standards, architecture principles, and workflow rules
+alwaysApply: true
+---
+
+# Project Instructions
+
+## NO EMOJIS OR ICONS POLICY
+
+ABSOLUTELY FORBIDDEN EVERYWHERE:
+- NO emojis in code, comments, documentation, commit messages, or any output
+- NO icons or decorative Unicode symbols anywhere
+- NO checkmarks, arrows, bullets, or any non-ASCII decorations
+- Plain ASCII text ONLY in all contexts
+
+This applies to source code files, comments, documentation, commit messages, markdown files, console output, logs, error messages, and all other text output.
+
+Use plain text instead:
+- Instead of checkmarks: "DONE", "Complete", "Success"
+- Instead of arrows: "->", "=>", or plain text
+- Instead of bullets: "-", "*", or numbered lists
+- Formal, scientific, professional language only
+
+## Development Guidelines
+
+### Code Changes
+- Atomic Changes: All changes must be atomic and do exactly what was required
+- No Unnecessary Documentation: Do not create documentation and installation files unless explicitly requested
+- English Only: Use only English everywhere - in names, comments, and descriptions
+- Meaningful Comments: Write comments only when they add clarity and explain the "why," not the "what." Avoid redundant comments that state the obvious from the code's context or naming.
+- Strict Professional Style: Always maintain formal, professional language.
+
+### Architecture Principles
+- Modular Design: Create separate modules for each specific task
+- Independent Modules: Each module should accept independent data sets, return equally independent data sets, and be reusable in other projects
+- Thread Safety: Each module should work with its own copy of data for multithreaded execution. If multithreading is not possible, add a large, noticeable comment in the module description explaining this limitation
+- Main Program: Should contain only orchestration logic, not business logic itself
+
+### Project Management
+- Version Control: Always offer to make a commit after finishing isolated features
+- Clean Root: Keep the root directory clean, place modules in subfolders
+- Dependencies: Use third-party repositories as submodules unless explicitly requested otherwise
+- Git First: Any project should start with Git - create a repository if it doesn't exist
+
+### Code Migration
+- Strict Transfer: When moving functionality, files, or modules, ensure code is transferred without changes
+- Clear Warnings: Provide clear warnings about any edits that need to be made during transfers
+
+## Workflow
+
+### Documentation-First (Mandatory)
+Before implementing any changes, review the relevant documentation:
+- Service-specific documentation: `packages/*/README.md`
+- Shared documentation: `packages/shared/docs/`
+
+If the proposed change deviates from or is not covered by existing documentation, first update the documentation and get explicit user approval before proceeding with code implementation.
+
+### Implementation Guidelines
+- Modular Design: Create separate modules for each specific task
+- Independent Modules: Ensure modules are self-contained and reusable
+- Thread Safety: Design for multithreaded execution where possible
+- Separation of Concerns: Keep orchestration logic separate from business logic
+- Clarity and Naming: Use clear, English naming conventions
+- Atomic Changes: Focus on atomic, specific implementations
+- Clean Project Structure: Keep the project structure clean and organized
+- Type Safety: Avoid using `any` type unless explicitly requested. Use proper TypeScript types, interfaces, or generic constraints instead
+- Minimal API Surface: Do not generate API methods, endpoints, or public interfaces unless they are explicitly needed. Only create what is actually used
+
+## Strict Code Rules
+
+### Language Requirements
+- All code, comments, documentation, commit messages must be in English only
+- No non-English identifiers (variable names, function names, etc.)
+- Formal, scientific writing style - no colloquialisms or informal expressions
+
+### Import Rules
+- Never use relative imports across packages (e.g., `../../../shared/`)
+- Use package name imports when crossing package boundaries
+- Relative imports only allowed within same package
+- Never use CommonJS `require()` - only ES6 imports
+
+### Type Safety Rules
+- `any` type is strictly prohibited without explicit approval
+- Use proper TypeScript types, interfaces, generics, or `unknown` with type narrowing
+- All API endpoint responses must be typed in shared package
+- Every backend/frontend data exchange must have corresponding interface in shared
+- Type Reusability: ALWAYS reuse existing types before creating new ones
+- When a type is needed on frontend, first check if backend response is typed
+- If backend response is not typed, type it in shared package first
+- Trace types from their source (database models, API responses, domain entities)
+- Before creating a new type, verify by examining code from the data source that a new type is truly necessary
+- Prefer type composition and transformation over duplication
+- Use helper types (like JsonSerialized, Omit, Pick) to derive types from existing ones
+
+### Test-Driven Approach (Mandatory)
+After implementing any feature or fix, propose and (upon approval) implement relevant tests (unit, integration, etc.).
+After any modification to the codebase, run the relevant tests to verify system integrity and report the results.
+
+## Commit Message Format
+
+```
+feat(scope): short description
+
+Detailed explanation of changes.
+```
+
+Example:
+```
+feat(shared): add message broker abstraction layer
+
+Implemented IMessageBroker interface and RedisBroker wrapper
+for BullMQ. Allows replacing Redis with other message brokers.
+```
