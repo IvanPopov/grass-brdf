@@ -19,9 +19,22 @@ export const DEFAULT_PARAMS = {
   penumbra:          0.25,    // soft-edge fraction of cone      [0–1]  (Three.js SpotLight param)
 
   // ── Colorimetric / physical ───────────────────────────────────────────
-  colorTempK:        5600,    // CCT correlated color temperature [K]   (FIFA: 5600 K = daylight)
-  cri:               85,      // CRI Ra — color rendering index  [Ra]   (FIFA Class V: ≥ 80)
-  maintenanceFactor: 0.80,    // MF — light loss over time       [0–1]  (FIFA: 0.8 for new lamps)
+  colorTempK: 5600,           // CCT correlated color temperature [K]   (FIFA: 5600 K = daylight)
+
+  // Parameters reserved for future illuminance sensor simulation:
+  //
+  // cri: 85
+  //   CRI Ra — Color Rendering Index [Ra], FIFA Class V requires ≥ 80.
+  //   Will be needed when simulating camera/eye colour accuracy on the sensor
+  //   grid; does not affect raw lux values but determines colour fidelity.
+  //
+  // maintenanceFactor: 0.80
+  //   MF — Light Loss Factor [0–1], accounts for LED lumen depreciation and
+  //   lens contamination over the lamp lifetime. FIFA specifies MF = 0.8.
+  //   Applied as a scalar multiplier to computed E_h / E_v values:
+  //     E_maintained = E_initial × MF
+  //   Not applied to SpotLight intensity because the rendered scene shows
+  //   initial (new-lamp) conditions; the sensor module will apply it.
 
   // ── Rig geometry ──────────────────────────────────────────────────────
   rigHeight:       50,        // mounting height above pitch     [m]    (FIFA: 45–55 m)

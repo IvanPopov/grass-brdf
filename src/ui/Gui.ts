@@ -20,7 +20,7 @@ export interface GuiHandle {
  *
  * Folders:
  *   Fixtures        – fixture count, simulation count, flux, beam angle, penumbra
- *   Physical        – CCT, CRI, maintenance factor
+ *   Physical        – CCT (cri / maintenanceFactor reserved for sensor module)
  *   Rig Geometry    – height, oval dimensions
  *   Computed Values – read-only display of values derived from the above
  *
@@ -54,10 +54,8 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
   phys.add(params, 'colorTempK', 3_000, 7_000, 100)
     .name('CCT  [K]  (FIFA: 5600 = daylight)')
     .onChange(onChange);
-  phys.add(params, 'cri', 70, 99, 1)
-    .name('CRI Ra  (FIFA ≥ 80, display only)');
-  phys.add(params, 'maintenanceFactor', 0.5, 1.0, 0.01)
-    .name('Maintenance factor  [0–1]  (FIFA: 0.8)');
+  // cri and maintenanceFactor are reserved for the illuminance sensor module
+  // (see config.ts for full descriptions).
 
   // ── Rig geometry ──────────────────────────────────────────────────────────
   const geom = gui.addFolder('Rig Geometry');
