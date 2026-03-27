@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { LightRigParams } from '../config';
+import { LightRigParams, MAX_SHADER_LIGHTS } from '../config';
 import { GroupPhysics } from '../lighting/LightRig';
 
 /** Read-only computed display updated after each rebuild. */
@@ -33,17 +33,43 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   // ── Fixtures ─────────────────────────────────────────────────────────────
   const fix = gui.addFolder('Fixtures');
+
+  // Hard upper bound for simulatedCount: total lights in scene must not exceed
+  // MAX_SHADER_LIGHTS (DataTexture capacity in FieldMaterial), leaving room for fillCount.
+  function simHardMax(): number {
+    return Math.min(params.fixtureCount, MAX_SHADER_LIGHTS - params.fillCount);
+  }
+
+  // Clamp params.simulatedCount to the current hard max and refresh slider display.
+  function clampSim(): void {
+    const max = simHardMax();
+    if (params.simulatedCount > max) {
+      params.simulatedCount = max;
+      simController.updateDisplay();
+    }
+    simController.max(max);
+  }
+
+  // simulatedCount must be declared first so the other onChange handlers can reference it.
+  const simController = fix.add(params, 'simulatedCount', 4, simHardMax(), 1)
+    .name(`Simulated SpotLights  [qty, <=${MAX_SHADER_LIGHTS}]`)
+    .onChange(onChange);
+
   fix.add(params, 'fixtureCount', 100, 450, 1)
     .name('Total fixtures  [qty]  (FIFA: 280–450)')
-    .onChange(onChange);
-  fix.add(params, 'simulatedCount', 4, 80, 1)
-    .name('Simulated SpotLights  [qty]')
-    .onChange(onChange);
+    .onChange(() => { clampSim(); onChange(); });
+
+  fix.add(params, 'fillCount', 0, 8, 1)
+    .name('Corner fill SpotLights  [qty]  (0–8)')
+    .onChange(() => { clampSim(); onChange(); });
   fix.add(params, 'fluxPerFixture', 80_000, 220_000, 1_000)
     .name('Flux / fixture  [lm]  (FIFA: 150k–180k)')
     .onChange(onChange);
   fix.add(params, 'beamAngleDeg', 8, 45, 0.5)
     .name('Beam angle  [deg]  (stadiums: 10–40)')
+    .onChange(onChange);
+  fix.add(params, 'iesExponent', 0, 6, 0.5)
+    .name('IES exponent  [0=uniform, 3=stadium]')
     .onChange(onChange);
   fix.add(params, 'penumbra', 0, 0.8, 0.01)
     .name('Penumbra  [0–1]')

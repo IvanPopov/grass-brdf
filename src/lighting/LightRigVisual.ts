@@ -16,6 +16,9 @@ import { SpotMeta, computeGroupPhysics } from './LightRig';
 export class LightRigVisual {
   readonly group = new THREE.Group();
 
+  /** When false, beam cone wireframes are omitted from the next build(). */
+  showCones = false;
+
   dispose(): void {
     this.group.traverse(obj => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Line) {
@@ -41,24 +44,26 @@ export class LightRigVisual {
       // ── Sphere marker at light position ──────────────────────────────────
       const sphere = new THREE.Mesh(
         new THREE.SphereGeometry(0.9, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0xffee88 }),
+        new THREE.MeshBasicMaterial({ color: 0xffee88, toneMapped: false }),
       );
       sphere.position.copy(spot.position);
       this.group.add(sphere);
 
       // ── Beam cone wireframe ───────────────────────────────────────────────
-      //   Direction: from SpotLight position toward aim target
-      //   Cone half-angle α = SpotLight.angle = beamAngleDeg / 2  [rad]
-      //   Cone length L = distance from light to aim target        [m]
-      //   Base radius r = L × tan(α)                              [m]
-      const aimDir  = new THREE.Vector3().subVectors(meta.aimTarget, spot.position).normalize();
-      const coneLen = spot.position.distanceTo(meta.aimTarget);
-      const coneGeo = buildConeGeometry(spot.position, aimDir, halfAngle, coneLen, 8);
-      const coneObj = new THREE.LineSegments(
-        coneGeo,
-        new THREE.LineBasicMaterial({ color: 0x336688, transparent: true, opacity: 0.35 }),
-      );
-      this.group.add(coneObj);
+      if (this.showCones) {
+        //   Direction: from SpotLight position toward aim target
+        //   Cone half-angle α = SpotLight.angle = beamAngleDeg / 2  [rad]
+        //   Cone length L = distance from light to aim target        [m]
+        //   Base radius r = L × tan(α)                              [m]
+        const aimDir  = new THREE.Vector3().subVectors(meta.aimTarget, spot.position).normalize();
+        const coneLen = spot.position.distanceTo(meta.aimTarget);
+        const coneGeo = buildConeGeometry(spot.position, aimDir, halfAngle, coneLen, 8);
+        const coneObj = new THREE.LineSegments(
+          coneGeo,
+          new THREE.LineBasicMaterial({ color: 0x336688, transparent: true, opacity: 0.35, toneMapped: false }),
+        );
+        this.group.add(coneObj);
+      }
 
       // ── CSS2D label ───────────────────────────────────────────────────────
       const label = buildLabel(meta, phys, params.beamAngleDeg);
@@ -93,7 +98,7 @@ function buildOvalRing(params: LightRigParams): THREE.Line {
   }
   return new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({ color: 0x445566 }),
+    new THREE.LineBasicMaterial({ color: 0x445566, toneMapped: false }),
   );
 }
 

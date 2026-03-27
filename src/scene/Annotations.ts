@@ -18,11 +18,11 @@ const CONE_H      = 1.8;      // [m] arrowhead cone height
 // ─────────────────────────────────────────────────────────────────────────────
 
 function lineMat(): THREE.LineBasicMaterial {
-  return new THREE.LineBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true });
+  return new THREE.LineBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, toneMapped: false });
 }
 
 function meshMat(): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true });
+  return new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, toneMapped: false });
 }
 
 function addLine(parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3): void {
@@ -65,7 +65,7 @@ function addLabel(
   ctx.fillText(text, 160, 40);
 
   const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }),
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, toneMapped: false }),
   );
   sprite.position.copy(pos);
   sprite.scale.set(scale[0], scale[1], 1);

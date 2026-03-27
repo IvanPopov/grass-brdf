@@ -9,6 +9,7 @@ import { createField } from './scene/Field';
 import { createGrid } from './scene/Grid';
 import { createFieldAnnotations, HeightAnnotation } from './scene/Annotations';
 import { buildGui } from './ui/Gui';
+import { IlluminanceDebug } from './debug/IlluminanceDebug';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 // Shallow copy so GUI mutations do not modify the original defaults.
@@ -56,7 +57,7 @@ camera.position.set(0, 120, 180);
 
 // ── Static scene objects ──────────────────────────────────────────────────────
 createGrid(scene);
-createField(scene);
+const { fieldMat } = createField(scene);
 createFieldAnnotations(scene);
 
 // ── Dynamic objects ───────────────────────────────────────────────────────────
@@ -67,16 +68,33 @@ scene.add(lightRigVisual.group);
 
 const heightAnnotation = new HeightAnnotation(scene);
 
+const debug = new IlluminanceDebug();
+debug.init(scene);
+
 // ── GUI ───────────────────────────────────────────────────────────────────────
 const { gui, updateComputedDisplay } = buildGui(params, rebuild);
 
+// Debug controls
+const debugFolder = gui.addFolder('Debug');
+debugFolder.add(lightRigVisual, 'showCones').name('Cone wireframes')
+  .onChange(() => lightRigVisual.build(lightRig.lights, params));
+debugFolder.add(debug, 'showAimTargets').name('Aim targets (orange)')
+  .onChange(() => debug.rebuild(lightRig.lights));
+debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (11×11)')
+  .onChange(() => debug.rebuild(lightRig.lights));
+debugFolder.add(debug, 'showGlareProbes').name('Glare probes (player/GK)')
+  .onChange(() => debug.rebuild(lightRig.lights));
+debugFolder.add({ log: () => debug.logReport(lightRig.lights) }, 'log')
+  .name('Log report to console');
+debugFolder.open();
+
 // Render settings — kept in main.ts because the renderer lives here.
-// Exposure is a pre-tonemapping linear multiplier:
-//   display = ACES( linear_scene_color × exposure )
+// Exposure is passed into toneMapping() internally (each ACES/Reinhard/etc.
+// implementation in Three.js multiplies the input by toneMappingExposure).
 const renderParams = { exposure: renderer.toneMappingExposure };
 const renderFolder = gui.addFolder('Render');
 renderFolder.add(renderParams, 'exposure', 0.0001, 0.02, 0.0001)
-  .name('Exposure  [linear multiplier]')
+  .name('Exposure')
   .onChange((v: number) => { renderer.toneMappingExposure = v; });
 renderFolder.open();
 
@@ -100,6 +118,10 @@ function rebuild(): void {
   lightRig.build(params);
   lightRigVisual.build(lightRig.lights, params);
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
+  fieldMat.update(lightRig.lights, params.iesExponent);
+  debug.iesExponent = params.iesExponent;
+  debug.rebuild(lightRig.lights);
+  debug.logReport(lightRig.lights);
 
   const phys = computeGroupPhysics(params);
   updateComputedDisplay(phys, params);
