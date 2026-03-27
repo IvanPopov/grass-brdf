@@ -164,8 +164,6 @@ export class LightRig {
 
     const phys      = computeGroupPhysics(params);
     const color     = cctToColor(params.colorTempK);
-    // SpotLight.angle = outer cone HALF-angle [rad]
-    const halfAngle = THREE.MathUtils.degToRad(params.beamAngleDeg / 2);
 
     // ── IES cookie texture ────────────────────────────────────────────────────
     // SpotLight.map can approximate the IES beam distribution visually, but
@@ -184,7 +182,7 @@ export class LightRig {
     // an IES texture atlas, or (b) render each spot into a separate offscreen
     // accumulation buffer.  The buildIesTexture() function below remains available.
 
-    // ── Long-side arc placement ───────────────────────────────────────────────
+    // ── Long-side arc placement (Auto-Grid Aiming) ─────────────────────────
     // LONG_SIDE_MIN = 0.45 → |lz| >= ovalHalfWidth × 0.45 for all primary lights.
     // This eliminates goal-end positions (FIFA 20° exclusion zone).
     const LONG_SIDE_MIN = 0.45;
@@ -194,194 +192,170 @@ export class LightRig {
 
     const N    = params.simulatedCount;
     const half = Math.ceil(N / 2);
+    const southCount = N - half;
 
-    const addSpot = (lx: number, ly: number, lz: number, aim: THREE.Vector3, idx: number): void => {
-      const spot = new THREE.SpotLight(color, phys.intensity, 0, halfAngle, params.penumbra, 2);
-      spot.position.set(lx, ly, lz);
-      spot.target.position.copy(aim);
-      spot.castShadow = false;
-      spot.userData['meta'] = {
-        index: idx, groupSize: phys.groupSize,
-        fluxPerGroup: phys.fluxPerGroup, intensityCd: phys.intensity,
-        solidAngle: phys.solidAngle, aimTarget: aim.clone(),
-      } satisfies SpotMeta;
-      this.group.add(spot);
-      this.group.add(spot.target);
-      this._lights.push(spot);
-    };
+    interface SpotDef { lx: number; lz: number; isNorth: boolean; }
+    const northSpots: SpotDef[] = [];
+    const southSpots: SpotDef[] = [];
 
     for (let i = 0; i < N; i++) {
       const isNorth = i < half;
       const j       = isNorth ? i : i - half;
-      const frac    = (j + 0.5) / half;
+      const count   = isNorth ? half : southCount;
+      const frac    = (j + 0.5) / count;
       const t       = isNorth
         ? tStart + frac * arcSpan
         : Math.PI + tStart + frac * arcSpan;
 
       const lx = params.ovalHalfLength * Math.cos(t);
       const lz = params.ovalHalfWidth  * Math.sin(t);
-
-      addSpot(lx, params.rigHeight, lz, computeMainAimTarget(lx, lz, isNorth, params), i);
+      
+      if (isNorth) northSpots.push({ lx, lz, isNorth });
+      else         southSpots.push({ lx, lz, isNorth });
     }
 
-    // ── Corner fill lights ────────────────────────────────────────────────────
-    // Placed at the 4 diagonal roof corners (just outside the long-side arc),
-    // each aimed at the lateral midfield zone that primary cross-fire leaves dark.
-    // Checked against FIFA 20° exclusion: |azimuth from goal| ≈ 29° > 20° ✓
-    if (params.fillCount > 0) {
-      const fillPositions = buildFillPositions(params);
-      fillPositions.forEach((fp, fi) => {
-        addSpot(fp.lx, params.rigHeight, fp.lz, fp.aim, N + fi);
-      });
-    }
-  }
-}
+    // Sort positions geographically from West (-X) to East (+X)
+    northSpots.sort((a, b) => a.lx - b.lx);
+    southSpots.sort((a, b) => a.lx - b.lx);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Aiming strategy
-// ─────────────────────────────────────────────────────────────────────────────
+    // Generate interleaved "zigzag" targets.
+    // Instead of a 2D matrix that might not divide evenly (leaving black corners),
+    // we strictly space the X coordinates evenly from West to East to match the lights.
+    // The Z coordinates cycle through a pattern (Far, Near, Mid) so adjacent lights
+    // cover different depths, blending their penumbras perfectly.
+    const buildGridTargets = (count: number, targetZSign: number): THREE.Vector3[] => {
+      if (count === 0) return [];
+      
+      // Cycle through the Z pattern.
+      // We push the "Far" target deeply (0.90) to cover the far touchline,
+      // and the "Near" target (0.15) to cover the midfield seam.
+      // let zPattern = [0.5]; // Mid only - Removed to fix lint error
+      // if (count >= 12) {
+      //   zPattern = [0.90, 0.15, 0.50]; // Far, Near, Mid
+      // } else if (count >= 6) {
+      //   zPattern = [0.85, 0.25];       // Far, Near
+      // }
 
-/**
- * Primary aiming — FIFA §3.3 cross-firing with Z-target fanning.
- *
- * Cross-fire rule:
- *   North-side lights (lz > 0) → aim at south half (targetZ < 0).
- *   South-side lights (lz < 0) → aim at north half (targetZ > 0).
- *
- * Z-target fanning (key fix for uniformity):
- *   In a real 312-fixture stadium every light aims at a unique patch.
- *   With only N_sim simulated groups the naive "all aim at z=±FIELD_H/4" approach
- *   concentrates all energy at the quarter-line and leaves z>FIELD_H/4 dark.
- *
- *   Instead, map each light's arc position to a target depth in the opposite half:
- *
- *     frac = (|lz| − lz_min) / (lz_max − lz_min)     [0 = goal-end, 1 = midfield]
- *
- *     targetZDepth = FIELD_H/2 × (1 − frac × 0.5)
- *       frac = 0 (goal-end position) → targetZDepth = FIELD_H/2 = 34 m  (far goal area)
- *       frac = 1 (midfield position) → targetZDepth = FIELD_H/4 = 17 m  (quarter line)
- *
- *   This fans aim targets evenly from z = ±17 m to z = ±34 m, covering the entire
- *   opposite half with N_sim beams instead of piling all on a single strip.
- *
- * X-distribution:
- *   targetX = lx × (FIELD_W/2 / ovalHalfLength) × 0.75
- *   Scale 0.75 keeps targets inside the pitch for extreme corner positions.
- */
-function computeMainAimTarget(
-  lx:      number,
-  lz:      number,    // arc Z-position — used for fanning logic
-  isNorth: boolean,
-  p:       LightRigParams,
-): THREE.Vector3 {
-  // Z-fanning: goal-end lights aim deep, midfield lights aim at quarter line.
-  const LONG_SIDE_MIN = 0.45;
-  const lz_min = p.ovalHalfWidth * LONG_SIDE_MIN;           // ≈ 24.75 m
-  const lz_max = p.ovalHalfWidth;                           // ≈ 55 m
-  const frac   = Math.max(0, Math.min(1,
-    (Math.abs(lz) - lz_min) / Math.max(1, lz_max - lz_min),
-  ));
-  // Depth in opposite half: 34 m at goal-end (frac=0), 17 m at midfield (frac=1)
-  const targetZDepth = (FIELD_H / 2) * (1 - frac * 0.5);
-  const halfSign     = isNorth ? -1 : 1;
-  const targetZ      = halfSign * targetZDepth;
+      const targets: THREE.Vector3[] = [];
+      // In order to push more light into the corners (which suffer from severe r^2 dropoff),
+      // we use a modified sine curve to non-linearly distribute the targets.
+      // This clusters targets densely at the extreme edges (x = ±48.5) and spaces them
+      // out in the centre, effectively taking energy away from the "hot ridge" in the
+      // middle and moving it to the dark edges.
+      for (let i = 0; i < count; i++) {
+        const linearFrac = count > 1 ? i / (count - 1) : 0.5; // 0.0 to 1.0
+        
+        // angle goes from -PI/2 to PI/2
+        const angle = (linearFrac - 0.5) * Math.PI;
+        // sin(angle) gives -1.0 to 1.0, heavily clustered at the ends
+        const sineFrac = (Math.sin(angle) + 1.0) / 2.0; // map back to 0.0 to 1.0
+        
+        // Blend linear and sine distributions
+        // 0.25 weight to sine (was 0.5) shifts even more targets back towards the center of the field,
+        // reducing the concentration of light at the penalty areas and boosting the midfield.
+        const xFrac = linearFrac * 0.75 + sineFrac * 0.25;
+        
+        // Target spans 92% of the pitch width (-48.3m to +48.3m)
+        // Pulled in slightly from 96% to move energy away from the extreme goal areas towards the center.
+        const cx = -FIELD_W * 0.46 + xFrac * (FIELD_W * 0.92);
+        
+        // We need a stable pattern that ensures the FAR edge (touchline) is hit 
+        // consistently along the entire length of the pitch.
+        let zPattern = [0.5]; // Mid only
+        if (count >= 12) {
+          // Push Far target even deeper (0.95) to combat r^2 and steep incidence angle
+          // Pull Near slightly deeper (0.20) to smooth the gap.
+          zPattern = [0.95, 0.20, 0.95, 0.55]; 
+        } else if (count >= 6) {
+          zPattern = [0.90, 0.25];
+        }
 
-  // X proportional to light position along the long axis.
-  // Scale = 1.0: light at lx = ovalHalfLength maps to targetX = FIELD_W/2 (touchline).
-  // Previous scale 0.75 undershot by 25 %, leaving corner aim points at x ≈ 34 m
-  // instead of x ≈ 45 m — 18.7 m from the corner, outside the 13.4 m beam footprint.
-  const targetX = lx * (FIELD_W / 2 / p.ovalHalfLength);
+        // Cycle through the Z pattern
+        const baseZFrac = zPattern[i % zPattern.length];
+        
+        // Push the Far and Near targets slightly further outwards to combat Z-axis dropoff
+        // 0.25 (was 0.20) pushes the extreme edges a bit further to catch the touchlines.
+        let compensatedZFrac = baseZFrac + (baseZFrac - 0.5) * 0.25;
+        
+        // Apply "barrel distortion" to the Z targets:
+        // At the midfield (angle ~ 0, cos(angle) ~ 1), the throw distance across the pitch is much longer
+        // than at the corners, creating an "hourglass" shape of illuminance (dark waist at edges).
+        // We compensate by pushing the Z targets further outwards (away from center) specifically at the midfield.
+        const barrelBoost = Math.cos(angle) * 0.10; // Push up to 10% further outwards at X=0 (was 0.20)
+        compensatedZFrac += barrelBoost;
+        
+        // Clamp to avoid aiming completely into the stands
+        compensatedZFrac = Math.min(1.05, Math.max(0.0, compensatedZFrac));
+        
+        const cz = targetZSign * (FIELD_H / 2) * compensatedZFrac;
+        
+        targets.push(new THREE.Vector3(cx, 0, cz));
+      }
+      return targets;
+    };
 
-  return new THREE.Vector3(
-    Math.max(-FIELD_W * 0.48, Math.min(FIELD_W * 0.48, targetX)),
-    0,
-    Math.max(-FIELD_H * 0.48, Math.min(FIELD_H * 0.48, targetZ)),
-  );
-}
+    const northTargets = buildGridTargets(half, -1); // North aims South (z < 0)
+    const southTargets = buildGridTargets(southCount, 1); // South aims North (z > 0)
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Corner fill lights
-// ─────────────────────────────────────────────────────────────────────────────
+    // The parameter beamAngleDeg is now treated as the "reference" angle for a
+    // nominal throw distance (e.g. 70 m).  We adjust each fixture's actual angle
+    // inversely with throw distance so that the projected spot size on the field
+    // remains roughly constant.
+    const REFERENCE_THROW = 70.0; // [m] throw distance where beam = param.beamAngleDeg
 
-interface FillPosition { lx: number; lz: number; aim: THREE.Vector3; }
-
-/**
- * Generates positions and aim targets for supplemental corner-fill lights.
- *
- * Real FIFA stadiums have a secondary set of fixtures at the corners of the roof
- * structure to cover zones that primary cross-firing leaves dark:
- *   1. The lateral midfield seam (x ≈ ±40–52 m, z ≈ 0).
- *   2. The far field corners (|x| ≈ 45–52 m, |z| ≈ 28–34 m).
- *
- * Placement (per fill light):
- *   t_fill = tStart − FILL_OFFSET_DEG outside each arc endpoint.
- *   At tStart ≈ 26.7°, fill lights land at t ≈ 14.7°:
- *     lx ≈ ±77 m,  lz ≈ ±14 m
- *   FIFA 20° exclusion check: azimuth from goal centre ≈ arctan(14/24.5) ≈ 30° > 20° ✓
- *
- * Aiming — two rings:
- *
- *   Base ring (fi 0–3): cross-fire to the OPPOSITE goal-centre seam.
- *     East fills  (lx > 0): aim at (−FIELD_W × 0.47,  0,  0)  [west goal centre]
- *     West fills  (lx < 0): aim at (+FIELD_W × 0.47,  0,  0)  [east goal centre]
- *   This specifically fixes the 0-lux zone at x = ±52.5, z = 0 that the primary
- *   quarter-point cross-fire cannot cover (all 32 primary beams pass through z = ±17).
- *
- *   Extra ring (fi 4–7): placed one step further outside, aimed at the far diagonal
- *   field corners that remain dark after both primary and base-ring illumination.
- *     NE fill → south-west corner zone (−FIELD_W × 0.42,  0,  −FIELD_H × 0.42)
- *     NW fill → south-east corner zone
- *     SW fill → north-east corner zone
- *     SE fill → north-west corner zone
- *
- * fillCount controls how many positions are instantiated (default 8 = both rings).
- */
-function buildFillPositions(p: LightRigParams): FillPosition[] {
-  const LONG_SIDE_MIN   = 0.45;
-  const tStart          = Math.asin(LONG_SIDE_MIN);         // ≈ 26.7°
-  const FILL_OFFSET_RAD = THREE.MathUtils.degToRad(12);     // place 12° outside arc
-
-  // 4 base positions: NE, NW, SW, SE corners of the oval
-  const baseAngles = [
-    tStart - FILL_OFFSET_RAD,                    // NE  (lx > 0, lz > 0)
-    Math.PI - tStart + FILL_OFFSET_RAD,          // NW  (lx < 0, lz > 0)
-    Math.PI + tStart - FILL_OFFSET_RAD,          // SW  (lx < 0, lz < 0)
-    2 * Math.PI - tStart + FILL_OFFSET_RAD,      // SE  (lx > 0, lz < 0)
-  ];
-
-  // 4 extra positions for fillCount > 4: second ring, aimed at midfield seam
-  const extraAngles = baseAngles.map(a => {
-    const sign = Math.sin(a) >= 0 ? 1 : -1;
-    return a - sign * FILL_OFFSET_RAD;            // one step further outside arc
-  });
-
-  const allAngles = [...baseAngles, ...extraAngles];
-
-  const positions: FillPosition[] = [];
-  for (let fi = 0; fi < Math.min(p.fillCount, allAngles.length); fi++) {
-    const t  = allAngles[fi];
-    const lx = p.ovalHalfLength * Math.cos(t);
-    const lz = p.ovalHalfWidth  * Math.sin(t);
-    const isNorthFill = lz > 0;
-    const halfSign    = isNorthFill ? -1 : 1;
-
-    let aim: THREE.Vector3;
-    if (fi < 4) {
-      // Base ring — cross-fire to the OPPOSITE goal-centre seam.
-      // East fills aim at west goal centre; west fills aim at east goal centre.
-      // This covers the 0-lux zone at (±FIELD_W/2, 0, 0) that primary cross-fire misses.
-      aim = new THREE.Vector3(-Math.sign(lx) * FIELD_W * 0.47, 0, 0);
-    } else {
-      // Extra ring — aim at the far diagonal field corners (cross-fire).
-      // Uses negative-X cross-fire (opposite side) and opposite-half Z cross-fire.
-      aim = new THREE.Vector3(
-        -Math.sign(lx) * FIELD_W * 0.42,
-        0,
-        halfSign * FIELD_H * 0.42,
+    let spotIndex = 0;
+    const addSpot = (lx: number, ly: number, lz: number, aim: THREE.Vector3, idx: number): void => {
+      const pos = new THREE.Vector3(lx, ly, lz);
+      const throwDist = pos.distanceTo(aim);
+      
+      // Dynamic beam angle: narrow for far throws, wide for near throws.
+      // clamped between 15° (very narrow) and 45° (very wide) to stay realistic.
+      const dynamicBeamDeg = THREE.MathUtils.clamp(
+        params.beamAngleDeg * (REFERENCE_THROW / throwDist),
+        15,
+        45,
       );
-    }
+      const dynamicHalfAngle = THREE.MathUtils.degToRad(dynamicBeamDeg / 2);
+      
+      // Recompute intensity.
+      // We don't want a pure 1/solidAngle scale, because it overcompensates and
+      // burns out the centre. We blend between constant-intensity and constant-flux.
+      const refSolidAngle = 2 * Math.PI * (1 - Math.cos(THREE.MathUtils.degToRad(params.beamAngleDeg / 2)));
+      const dynamicSolidAngle = 2 * Math.PI * (1 - Math.cos(dynamicHalfAngle));
+      
+      // base intensity = Flux / RefSolidAngle
+      const baseIntensity = phys.fluxPerGroup * params.beamEfficiency / refSolidAngle;
+      // perfect conservation = Flux / DynamicSolidAngle
+      const conservedIntensity = phys.fluxPerGroup * params.beamEfficiency / dynamicSolidAngle;
+      
+      // Interpolate: 0.6 favors constant spot size over constant lux
+      const dynamicIntensity = THREE.MathUtils.lerp(baseIntensity, conservedIntensity, 0.6);
 
-    positions.push({ lx, lz, aim });
+      const spot = new THREE.SpotLight(
+        color, dynamicIntensity, 0, dynamicHalfAngle, params.penumbra, 2,
+      );
+      spot.position.copy(pos);
+      spot.target.position.copy(aim);
+      spot.castShadow = false;
+      spot.userData['meta'] = {
+        index: idx, groupSize: phys.groupSize,
+        fluxPerGroup: phys.fluxPerGroup, intensityCd: dynamicIntensity,
+        solidAngle: dynamicSolidAngle, aimTarget: aim.clone(),
+      } satisfies SpotMeta;
+      this.group.add(spot);
+      this.group.add(spot.target);
+      this._lights.push(spot);
+    };
+
+    const placeSpots = (spots: SpotDef[], targets: THREE.Vector3[]) => {
+      for (let i = 0; i < spots.length; i++) {
+        const spotDef = spots[i];
+        addSpot(spotDef.lx, params.rigHeight, spotDef.lz, targets[i], spotIndex++);
+      }
+    };
+
+    placeSpots(northSpots, northTargets);
+    placeSpots(southSpots, southTargets);
+
   }
-  return positions;
 }

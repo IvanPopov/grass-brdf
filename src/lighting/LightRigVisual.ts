@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { LightRigParams } from '../config';
-import { SpotMeta, computeGroupPhysics } from './LightRig';
+import { SpotMeta } from './LightRig';
 
 /**
  * LightRigVisual builds all debug/preview geometry for the lighting rig:
@@ -35,9 +35,6 @@ export class LightRigVisual {
 
     this.group.add(buildOvalRing(params));
 
-    const phys      = computeGroupPhysics(params);
-    const halfAngle = THREE.MathUtils.degToRad(params.beamAngleDeg / 2);
-
     lights.forEach(spot => {
       const meta = spot.userData['meta'] as SpotMeta;
 
@@ -52,12 +49,12 @@ export class LightRigVisual {
       // ── Beam cone wireframe ───────────────────────────────────────────────
       if (this.showCones) {
         //   Direction: from SpotLight position toward aim target
-        //   Cone half-angle α = SpotLight.angle = beamAngleDeg / 2  [rad]
+        //   Cone half-angle α = spot.angle                          [rad]
         //   Cone length L = distance from light to aim target        [m]
         //   Base radius r = L × tan(α)                              [m]
         const aimDir  = new THREE.Vector3().subVectors(meta.aimTarget, spot.position).normalize();
         const coneLen = spot.position.distanceTo(meta.aimTarget);
-        const coneGeo = buildConeGeometry(spot.position, aimDir, halfAngle, coneLen, 8);
+        const coneGeo = buildConeGeometry(spot.position, aimDir, spot.angle, coneLen, 8);
         const coneObj = new THREE.LineSegments(
           coneGeo,
           new THREE.LineBasicMaterial({ color: 0x336688, transparent: true, opacity: 0.35, toneMapped: false }),
@@ -66,7 +63,7 @@ export class LightRigVisual {
       }
 
       // ── CSS2D label ───────────────────────────────────────────────────────
-      const label = buildLabel(meta, phys, params.beamAngleDeg);
+      const label = buildLabel(spot);
       // Position 2 m above the sphere so the label clears the marker
       label.position.copy(spot.position).add(new THREE.Vector3(0, 2, 0));
       this.group.add(label);
@@ -162,22 +159,20 @@ function buildConeGeometry(
 
 /**
  * Creates a CSS2DObject (HTML label) showing computed photometric values
- * for the given SpotLight group.
+ * for the given SpotLight.
  *
  * Displayed values:
  *   #NN        – fixture index
  *   Φ = … klm  – group luminous flux    [kilolumens]
  *   I = … kcd  – group intensity        [kilocandela]
  *   G = …      – group size             [fixtures/SpotLight]
- *   θ = …°     – full beam angle        [degrees]
+ *   θ = …°     – dynamic beam angle     [degrees]
  */
-function buildLabel(
-  meta:         SpotMeta,
-  phys:         ReturnType<typeof computeGroupPhysics>,
-  beamAngleDeg: number,
-): CSS2DObject {
-  const klm = (phys.fluxPerGroup / 1_000).toFixed(0);
-  const kcd = (phys.intensity    / 1_000).toFixed(0);
+function buildLabel(spot: THREE.SpotLight): CSS2DObject {
+  const meta = spot.userData['meta'] as SpotMeta;
+  const klm  = (meta.fluxPerGroup / 1_000).toFixed(0);
+  const kcd  = (meta.intensityCd  / 1_000).toFixed(0);
+  const deg  = Math.round(THREE.MathUtils.radToDeg(spot.angle * 2));
 
   const div = document.createElement('div');
   div.className = 'light-label';
@@ -185,7 +180,7 @@ function buildLabel(
     `<b>#${String(meta.index + 1).padStart(2, '0')}</b>` +
     `<br>Φ = ${klm} klm` +
     `<br>I = ${kcd} kcd` +
-    `<br>G = ${phys.groupSize} · θ = ${beamAngleDeg}°`;
+    `<br>G = ${meta.groupSize} &middot; θ = ${deg}°`;
 
   return new CSS2DObject(div);
 }

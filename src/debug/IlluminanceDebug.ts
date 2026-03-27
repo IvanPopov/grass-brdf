@@ -108,18 +108,18 @@ function buildAimTargets(
 }
 
 /**
- * False-colour 11×11 disc grid (FIFA measurement grid) on the field.
+ * False-colour 31×31 disc grid (high-res measurement grid) on the field.
  * Each disc = one measurement point; colour = E_h [lux].
  *
- * Disc radius 2.5 m so discs are visible but do not fully tile the field.
+ * Disc radius 0.8 m so discs are visible but do not fully tile the field.
  */
 function buildHeatmap(
   lights: readonly THREE.SpotLight[],
   group:  THREE.Group,
   iesExp: number,
 ): void {
-  const stats = sampleGrid(lights, 11, 11, iesExp);
-  const geo   = new THREE.CylinderGeometry(2.5, 2.5, 0.06, 12);
+  const stats = sampleGrid(lights, 31, 31, iesExp);
+  const geo   = new THREE.CylinderGeometry(0.8, 0.8, 0.06, 12);
 
   for (let r = 0; r < stats.rows; r++) {
     for (let c = 0; c < stats.cols; c++) {
@@ -138,7 +138,7 @@ function buildHeatmap(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Logs the full 11×11 illuminance grid + uniformity metrics.
+ * Logs the full 21×21 illuminance grid + uniformity metrics.
  *
  * Interpretation guide:
  *
@@ -167,9 +167,9 @@ function buildHeatmap(
  * absolute lux numbers.
  */
 function logIlluminanceGrid(lights: readonly THREE.SpotLight[], iesExp: number): void {
-  const s = sampleGrid(lights, 11, 11, iesExp);
+  const s = sampleGrid(lights, 21, 21, iesExp);
 
-  console.group('=== E_h Illuminance Grid 11×11 [lux] (initial, UC=1, MF=1) ===');
+  console.group('=== E_h Illuminance Grid 21×21 [lux] (initial, UC=1, MF=1) ===');
 
   const header = 'z\\x  ' + s.xs.map(x => String(Math.round(x)).padStart(5)).join(' ');
   console.log(header);

@@ -80,7 +80,7 @@ debugFolder.add(lightRigVisual, 'showCones').name('Cone wireframes')
   .onChange(() => lightRigVisual.build(lightRig.lights, params));
 debugFolder.add(debug, 'showAimTargets').name('Aim targets (orange)')
   .onChange(() => debug.rebuild(lightRig.lights));
-debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (11×11)')
+debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (discs)')
   .onChange(() => debug.rebuild(lightRig.lights));
 debugFolder.add(debug, 'showGlareProbes').name('Glare probes (player/GK)')
   .onChange(() => debug.rebuild(lightRig.lights));

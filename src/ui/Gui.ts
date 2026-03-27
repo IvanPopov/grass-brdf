@@ -43,9 +43,9 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
   const fix = gui.addFolder('Fixtures');
 
   // Hard upper bound for simulatedCount: total lights in scene must not exceed
-  // MAX_SHADER_LIGHTS (DataTexture capacity in FieldMaterial), leaving room for fillCount.
+  // MAX_SHADER_LIGHTS (DataTexture capacity in FieldMaterial).
   function simHardMax(): number {
-    return Math.min(params.fixtureCount, MAX_SHADER_LIGHTS - params.fillCount);
+    return Math.min(params.fixtureCount, MAX_SHADER_LIGHTS);
   }
 
   // Clamp params.simulatedCount to the current hard max and refresh slider display.
@@ -78,16 +78,6 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
   );
 
   tip(
-    fix.add(params, 'fillCount', 0, 8, 1)
-      .name('Corner fill lights  [qty]')
-      .onChange(() => { clampSim(); onChange(); }),
-    'Supplemental SpotLights at the four roof corners.\n' +
-    'Cover the lateral midfield seam (x ≈ ±52 m, z ≈ 0) that primary\n' +
-    'cross-fire cannot reach.  Set to 0 to evaluate the primary arc alone.\n' +
-    'Warning: corner fills at low elevation angles can cause goalkeeper glare.',
-  );
-
-  tip(
     fix.add(params, 'fluxPerFixture', 80_000, 220_000, 1_000)
       .name('Flux / fixture  [lm]')
       .onChange(onChange),
@@ -108,11 +98,12 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   tip(
     fix.add(params, 'beamAngleDeg', 8, 45, 0.5)
-      .name('Beam angle  [deg]')
+      .name('Ref. beam angle  [deg]')
       .onChange(onChange),
-    'Full outer beam angle of the fixture (cone half-angle = this / 2).\n' +
-    'Maps to the IES field angle (10% intensity point), not the beam angle (50%).\n' +
-    'Stadium mixes: 10–15° narrow-throw for far/centre, 25–40° for near zones.',
+    'Reference beam angle for a nominal 70 m throw distance.\n' +
+    'The actual angle is scaled inversely with throw distance (fanning) so that\n' +
+    'the projected spot size remains roughly constant across the pitch.\n' +
+    'Wider reference angles (40-45°) improve uniformity at the cost of peak intensity.',
   );
 
   tip(
@@ -202,10 +193,10 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
     'Multiply by Beam efficiency to get lumens actually in the cone.',
   );
   const c3 = tip(
-    comp.add(computed, 'intensity_kcd').name('Intensity  [kcd]').disable(),
-    'Peak luminous intensity of one simulated SpotLight.\n' +
-    '= Flux/group × Beam efficiency / solid angle  [cd]\n' +
-    'Drives the inverse-square-law illuminance: E = I × cosθ / r².',
+    comp.add(computed, 'intensity_kcd').name('Ref. intensity  [kcd]').disable(),
+    'Baseline luminous intensity for the reference beam angle.\n' +
+    'Actual intensity varies dynamically per-fixture based on throw distance\n' +
+    'so that narrow beams produce more Candela to overcome r² loss.',
   );
   const c4 = tip(
     comp.add(computed, 'totalFlux_Mlm').name('Total rig flux  [Mlm]').disable(),

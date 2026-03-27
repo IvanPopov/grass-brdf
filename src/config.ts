@@ -5,7 +5,7 @@ export const FIELD_H = 68;  // [m] pitch width  — short axis (Z)
 /**
  * Maximum total SpotLights the GPU field shader can process per frame.
  * Constrained by DataTexture capacity in FieldMaterial (width = this value).
- * Total = simulatedCount + fillCount must stay at or below this limit.
+ * Total simulatedCount must stay at or below this limit.
  * Increasing it requires changing FieldMaterial.MAX_LIGHTS to the same value.
  */
 export const MAX_SHADER_LIGHTS = 128;
@@ -21,13 +21,9 @@ export const MAX_SHADER_LIGHTS = 128;
 export const DEFAULT_PARAMS = {
   // ── Fixture specification ──────────────────────────────────────────────
   fixtureCount:      312,     // total LED fixtures on the rig  [qty]  (FIFA: 280–450)
-  simulatedCount:    32,      // SpotLights placed in the scene [qty]  (each represents a group)
-  // Corner fill SpotLights.  Defaulting to 0 lets the primary arc be evaluated
-  // in isolation before deciding whether fills are needed and how to aim them.
-  // Enable via the GUI when primary-arc uniformity is acceptable.
-  fillCount:         0,       // supplemental corner-fill SpotLights   [qty]  (see LightRig.ts)
+  simulatedCount:    128,      // SpotLights placed in the scene [qty]  (each represents a group)
   fluxPerFixture:    165_000, // luminous flux per fixture       [lm]   (FIFA LED: 150k–180k lm)
-  beamAngleDeg:      30,      // full outer beam angle           [deg]  (stadiums mix 10–40 deg)
+  beamAngleDeg:      45,      // full outer beam angle           [deg]  (stadiums mix 10–40 deg)
   // penumbra: Three.js SpotLight soft-edge fraction [0–1].
   // Real stadium fixtures have a sharp beam edge (5–10° soft zone relative to the
   // full field angle). 0.10 → penumbra zone ≈ 10% of the half-angle, which
