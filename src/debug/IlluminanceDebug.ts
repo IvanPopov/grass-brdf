@@ -140,14 +140,36 @@ function buildHeatmap(
 /**
  * Logs the full 11×11 illuminance grid + uniformity metrics.
  *
- * Values are raw E_h [lux] before maintenance factor.
- * Compare against FIFA Class V targets:
- *   E_h = 2000–3500 lux,  U1 ≥ 0.7,  U2 ≥ 0.8
+ * Interpretation guide:
+ *
+ * FIFA Class V targets:
+ *   E_h minimum ≥ 2000 lux  (maintained, i.e. after applying MF = 0.80)
+ *   U1 = min / avg ≥ 0.70
+ *   U2 = min / max ≥ 0.80
+ *
+ * "2000–3500 lux" is the MINIMUM maintained value at the worst grid point,
+ * not the average.  In practice, high-end stadiums reach 3000–5000 lux average.
+ *
+ * Two correction factors are NOT applied here (simulation shows ideal conditions):
+ *
+ *   Maintenance Factor (MF = 0.80):
+ *     Accounts for LED lumen depreciation and lens dust over the fixture lifetime.
+ *     Multiply all E_h values by 0.80 to get maintained levels.
+ *
+ *   Utilisation Coefficient (UC ≈ 0.35–0.50 for real venues):
+ *     In a real stadium ~50–65% of emitted flux illuminates stands, façades, and
+ *     spill areas outside the pitch.  Our simulation has no stands, so UC ≈ 1.0
+ *     and simulated E_h values are 2–3× higher than measured UEFA venue averages.
+ *     Total rig flux (312 × 165 klm = 51.5 Mlm) on 7140 m² → 7212 lux theoretical
+ *     max; real average of ~2800 lux implies UC × MF ≈ 2800 / 7212 ≈ 0.39.
+ *
+ * The primary diagnostic value of this report is UNIFORMITY (U1, U2), not the
+ * absolute lux numbers.
  */
 function logIlluminanceGrid(lights: readonly THREE.SpotLight[], iesExp: number): void {
   const s = sampleGrid(lights, 11, 11, iesExp);
 
-  console.group('=== E_h Illuminance Grid 11×11 [lux] ===');
+  console.group('=== E_h Illuminance Grid 11×11 [lux] (initial, UC=1, MF=1) ===');
 
   const header = 'z\\x  ' + s.xs.map(x => String(Math.round(x)).padStart(5)).join(' ');
   console.log(header);
@@ -164,6 +186,10 @@ function logIlluminanceGrid(lights: readonly THREE.SpotLight[], iesExp: number):
   console.log(`  Avg  = ${Math.round(s.avg)} lux`);
   console.log(`  U1   = min/avg = ${s.U1.toFixed(3)}   (FIFA ≥ 0.70)`);
   console.log(`  U2   = min/max = ${s.U2.toFixed(3)}   (FIFA ≥ 0.80)`);
+  console.log('');
+  console.log('  Note: values are initial conditions (no MF, no UC).');
+  console.log(`  Maintained min  = ${Math.round(s.min * 0.80)} lux  (×MF 0.80)  — FIFA requires ≥ 2000 lux`);
+  console.log(`  Real-venue est. avg ≈ ${Math.round(s.avg * 0.39)} lux  (×UC 0.39 × MF 0.80 combined)`);
   console.groupEnd();
 }
 
@@ -268,9 +294,9 @@ function logSpacingAndAiming(lights: readonly THREE.SpotLight[]): void {
  *   This means our current rig may produce glare for goalkeepers — flagged in red.
  *
  * Elevation thresholds (colour coding):
- *   minElevDeg > 45°: green  — no practical glare risk.
- *   30° < minElevDeg ≤ 45°: yellow — acceptable but notable.
- *   minElevDeg ≤ 30°: red    — potential disability glare (FIFA comfort concern).
+ *   minElevDeg > 35°: green  — no practical glare risk.
+ *   25° < minElevDeg ≤ 35°: yellow — CAUTION, at or near FIFA 25° minimum.
+ *   minElevDeg ≤ 25°: red    — GLARE, below FIFA minimum elevation requirement.
  */
 
 interface ProbeEntry {
@@ -307,9 +333,21 @@ function buildProbeList(): ProbeEntry[] {
   return probes;
 }
 
-/** Elevation threshold for glare risk. */
-const GLARE_ELEV_RED    = 30; // [deg]  red zone — potential disability glare
-const GLARE_ELEV_YELLOW = 45; // [deg]  yellow zone — notable but tolerable
+// FIFA mounting requirement: every fixture must appear at elevation ≥ 25° from
+// any player's eye level.  Lights below this threshold cause disability glare.
+//
+// Thresholds:
+//   < 25°:   GLARE   — below FIFA minimum; disability glare risk.
+//   25°–35°: CAUTION — at or near FIFA limit; discomfort glare possible.
+//   > 35°:   OK      — well above limit; negligible glare concern.
+//
+// Typical rig geometry note:
+//   At rigHeight = 50 m and ovalHalfLength = 80 m the farthest opposite-side
+//   light seen from the goalkeeper (horiz. dist ≈ 132 m) appears at elevation
+//   arctan(48.5 / 132) ≈ 20° — below 25°.  This is a geometry constraint:
+//   the oval must be kept smaller OR the rig raised to meet FIFA comfort rules.
+const GLARE_ELEV_RED    = 25; // [deg]  GLARE   — below FIFA minimum
+const GLARE_ELEV_YELLOW = 35; // [deg]  CAUTION — within 10° of FIFA limit
 
 function elevToColor(minElevDeg: number): THREE.Color {
   if (minElevDeg <= GLARE_ELEV_RED)    return new THREE.Color(1.0, 0.15, 0.05);
@@ -341,7 +379,9 @@ function buildGlareProbes(
   const DISPLAY_Y = 3.0; // [m] visual sphere centre height
 
   for (const probe of probes) {
-    const result = sampleGlare(lights, probe.pos, 35, iesExp);
+    // elevLimitDeg = 25 matches FIFA minimum; lowAngleEv accumulates contributions
+    // only from lights appearing below 25° elevation.
+    const result = sampleGlare(lights, probe.pos, 25, iesExp);
     const color  = elevToColor(result.minElevDeg);
     const mat    = new THREE.MeshBasicMaterial({ color, toneMapped: false, depthTest: false });
     const geo    = probe.isGK ? gkSphGeo : sphGeo;
@@ -399,11 +439,11 @@ function logGlareReport(lights: readonly THREE.SpotLight[], iesExp: number): voi
   const probes = buildProbeList();
 
   for (const probe of probes) {
-    const result   = sampleGlare(lights, probe.pos, 35, iesExp);
+    const result   = sampleGlare(lights, probe.pos, 25, iesExp);
     const minElev  = result.minElevDeg;
-    const risk     = minElev <= GLARE_ELEV_RED    ? 'GLARE'
-                   : minElev <= GLARE_ELEV_YELLOW ? 'CAUTION'
-                   : 'OK';
+    const risk     = minElev <= GLARE_ELEV_RED    ? 'GLARE   (<25 deg FIFA)'
+                   : minElev <= GLARE_ELEV_YELLOW ? 'CAUTION (25-35 deg)'
+                   : 'OK      (>35 deg)';
 
     let evGaze = '-';
     if (probe.isGK && probe.gazDir) {

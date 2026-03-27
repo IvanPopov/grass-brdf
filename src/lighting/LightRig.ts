@@ -88,14 +88,24 @@ export interface SpotMeta {
  */
 export function computeGroupPhysics(p: LightRigParams): GroupPhysics {
   const groupSize    = Math.ceil(p.fixtureCount / p.simulatedCount);
+  // Total rated flux of the group (for display — before optical losses).
   const fluxPerGroup = groupSize * p.fluxPerFixture;                    // [lm]
 
   // Full beam angle → half-angle for solid-angle formula
   const theta      = THREE.MathUtils.degToRad(p.beamAngleDeg);
   const solidAngle = 2 * Math.PI * (1 - Math.cos(theta / 2));          // [sr]
 
-  // I = Φ / Ω   [cd]
-  const intensity  = fluxPerGroup / solidAngle;
+  // Effective flux delivered within the beam cone after luminaire optical losses.
+  //
+  //   Φ_beam = Φ_total × beamEfficiency
+  //
+  // The rated luminous flux is measured over the full IES distribution.
+  // Only a fraction lands inside the specified beam cone; the rest goes into
+  // the penumbra, wide-angle spill, and internal luminaire absorption.
+  // For modern LED stadium fixtures: beamEfficiency ≈ 0.40–0.63 (default 0.50).
+  //
+  // I = Φ_beam / Ω   [cd]
+  const intensity  = fluxPerGroup * p.beamEfficiency / solidAngle;
 
   return { groupSize, fluxPerGroup, solidAngle, intensity };
 }
@@ -232,43 +242,60 @@ export class LightRig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Primary aiming — FIFA §3.3 cross-firing.
+ * Primary aiming — FIFA §3.3 cross-firing with Z-target fanning.
  *
- * Each long-side light aims at the OPPOSITE QUARTER of the pitch:
- *   North side (lz > 0) → south half, depth = FIELD_H / 4 ≈ 17 m from centre.
- *   South side (lz < 0) → north half, same depth.
+ * Cross-fire rule:
+ *   North-side lights (lz > 0) → aim at south half (targetZ < 0).
+ *   South-side lights (lz < 0) → aim at north half (targetZ > 0).
  *
- * This is the strategy specified in FIFA Lighting Regulations §3.3 and
- * implemented in every professional stadium: lights on one side illuminate
- * the far half to raise E_v for cameras positioned on that side, while the
- * other side's lights raise E_v for the opposite cameras.
+ * Z-target fanning (key fix for uniformity):
+ *   In a real 312-fixture stadium every light aims at a unique patch.
+ *   With only N_sim simulated groups the naive "all aim at z=±FIELD_H/4" approach
+ *   concentrates all energy at the quarter-line and leaves z>FIELD_H/4 dark.
+ *
+ *   Instead, map each light's arc position to a target depth in the opposite half:
+ *
+ *     frac = (|lz| − lz_min) / (lz_max − lz_min)     [0 = goal-end, 1 = midfield]
+ *
+ *     targetZDepth = FIELD_H/2 × (1 − frac × 0.5)
+ *       frac = 0 (goal-end position) → targetZDepth = FIELD_H/2 = 34 m  (far goal area)
+ *       frac = 1 (midfield position) → targetZDepth = FIELD_H/4 = 17 m  (quarter line)
+ *
+ *   This fans aim targets evenly from z = ±17 m to z = ±34 m, covering the entire
+ *   opposite half with N_sim beams instead of piling all on a single strip.
  *
  * X-distribution:
  *   targetX = lx × (FIELD_W/2 / ovalHalfLength) × 0.75
- *   Proportional mapping keeps aim points inside the pitch (0.75 scale factor
- *   prevents extreme corner targets when lx ≈ ovalHalfLength).
- *
- * Known limitation with N_sim << N_real:
- *   312 real fixtures each aim at a unique ~22 m² patch; with 32 simulated
- *   lights every beam covers ~220 m².  The quarter-point zone (z ≈ ±17 m) will
- *   appear brighter than adjacent strips — acceptable for strategy comparison,
- *   not for precise absolute lux.  Use N_sim = fixtureCount for full accuracy.
+ *   Scale 0.75 keeps targets inside the pitch for extreme corner positions.
  */
 function computeMainAimTarget(
   lx:      number,
-  _lz:     number,
+  lz:      number,    // arc Z-position — used for fanning logic
   isNorth: boolean,
   p:       LightRigParams,
 ): THREE.Vector3 {
-  const halfSign = isNorth ? -1 : 1;
-  // Quarter-point cross-fire depth [m]
-  const targetZ = halfSign * FIELD_H / 4;
-  // Longitudinal distribution proportional to light position [m]
-  const targetX = lx * (FIELD_W / 2 / p.ovalHalfLength) * 0.75;
+  // Z-fanning: goal-end lights aim deep, midfield lights aim at quarter line.
+  const LONG_SIDE_MIN = 0.45;
+  const lz_min = p.ovalHalfWidth * LONG_SIDE_MIN;           // ≈ 24.75 m
+  const lz_max = p.ovalHalfWidth;                           // ≈ 55 m
+  const frac   = Math.max(0, Math.min(1,
+    (Math.abs(lz) - lz_min) / Math.max(1, lz_max - lz_min),
+  ));
+  // Depth in opposite half: 34 m at goal-end (frac=0), 17 m at midfield (frac=1)
+  const targetZDepth = (FIELD_H / 2) * (1 - frac * 0.5);
+  const halfSign     = isNorth ? -1 : 1;
+  const targetZ      = halfSign * targetZDepth;
+
+  // X proportional to light position along the long axis.
+  // Scale = 1.0: light at lx = ovalHalfLength maps to targetX = FIELD_W/2 (touchline).
+  // Previous scale 0.75 undershot by 25 %, leaving corner aim points at x ≈ 34 m
+  // instead of x ≈ 45 m — 18.7 m from the corner, outside the 13.4 m beam footprint.
+  const targetX = lx * (FIELD_W / 2 / p.ovalHalfLength);
+
   return new THREE.Vector3(
-    Math.max(-FIELD_W * 0.47, Math.min(FIELD_W * 0.47, targetX)),
+    Math.max(-FIELD_W * 0.48, Math.min(FIELD_W * 0.48, targetX)),
     0,
-    targetZ,
+    Math.max(-FIELD_H * 0.48, Math.min(FIELD_H * 0.48, targetZ)),
   );
 }
 

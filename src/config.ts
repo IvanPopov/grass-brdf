@@ -22,7 +22,10 @@ export const DEFAULT_PARAMS = {
   // ── Fixture specification ──────────────────────────────────────────────
   fixtureCount:      312,     // total LED fixtures on the rig  [qty]  (FIFA: 280–450)
   simulatedCount:    32,      // SpotLights placed in the scene [qty]  (each represents a group)
-  fillCount:         8,       // supplemental corner-fill SpotLights   [qty]  (see LightRig.ts)
+  // Corner fill SpotLights.  Defaulting to 0 lets the primary arc be evaluated
+  // in isolation before deciding whether fills are needed and how to aim them.
+  // Enable via the GUI when primary-arc uniformity is acceptable.
+  fillCount:         0,       // supplemental corner-fill SpotLights   [qty]  (see LightRig.ts)
   fluxPerFixture:    165_000, // luminous flux per fixture       [lm]   (FIFA LED: 150k–180k lm)
   beamAngleDeg:      30,      // full outer beam angle           [deg]  (stadiums mix 10–40 deg)
   // penumbra: Three.js SpotLight soft-edge fraction [0–1].
@@ -37,6 +40,24 @@ export const DEFAULT_PARAMS = {
   // and, critically, allows adjacent simulated beams (each representing 10 real fixtures)
   // to overlap smoothly — otherwise hard-edged patches are clearly visible.
   penumbra:          0.30,    // soft-edge fraction of cone      [0–1]  (effective range 0.20–0.40)
+
+  // ── Beam efficiency ───────────────────────────────────────────────────
+  // The rated luminous flux (fluxPerFixture) is the TOTAL output of the LED
+  // source in all directions.  Only a fraction of that flux is concentrated into
+  // the specified beam cone (beamAngleDeg).  The rest goes into the penumbra,
+  // backward scatter, and optical losses inside the luminaire housing.
+  //
+  // Definitions:
+  //   η_luminaire — luminaire optical efficiency (internal losses): 0.80–0.90.
+  //   η_cone      — fraction of exiting lumens within the beam cone: 0.50–0.70.
+  //   beamEfficiency = η_luminaire × η_cone ≈ 0.40–0.63.
+  //
+  // Effect on E_h:
+  //   I_peak [cd] = (groupFlux × beamEfficiency × (iesExp+1)) / solidAngle
+  //   Without this factor (beamEfficiency = 1.0) the simulation yields
+  //   E_h_avg ≈ 6 000 lux — 2× above the ~3 000 lux of real Class V stadiums.
+  //   With beamEfficiency = 0.50, E_h_avg ≈ 3 000 lux, matching real measurements.
+  beamEfficiency:    0.50,   // fraction of Φ_fixture within the beam cone [0–1]
 
   // ── IES-like beam profile ─────────────────────────────────────────────
   // Real stadium fixtures (e.g., Philips MVF403, Musco TLC) concentrate intensity
