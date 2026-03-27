@@ -7,13 +7,31 @@
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { overflow: hidden; background: #0a0a0a; }
+
+      /* CSS2D SpotLight labels */
+      .light-label {
+        color: #99ccdd;
+        font: 10px/1.5 monospace;
+        background: rgba(0, 8, 18, 0.72);
+        padding: 2px 6px;
+        border-radius: 3px;
+        border-left: 2px solid #336688;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .light-label b {
+        color: #ffcc44;
+      }
+
+      /* Camera controls hint */
       #hint {
         position: fixed;
         bottom: 16px;
         left: 16px;
-        color: #888;
+        color: #666;
         font: 12px/1.7 monospace;
         pointer-events: none;
+        z-index: 10;
       }
     </style>
   </head>
