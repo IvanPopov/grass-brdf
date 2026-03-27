@@ -84,6 +84,12 @@ debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (11×11)')
   .onChange(() => debug.rebuild(lightRig.lights));
 debugFolder.add(debug, 'showGlareProbes').name('Glare probes (player/GK)')
   .onChange(() => debug.rebuild(lightRig.lights));
+// In lighting-only mode the grass colour is replaced by 18 % neutral grey.
+// This reveals the pure illumination distribution (E_h contour) without the
+// green surface tinting the perception of uniformity.
+debugFolder.add({ lightingOnly: false }, 'lightingOnly')
+  .name('Lighting only (grey field)')
+  .onChange((v: boolean) => fieldMat.setLightingOnly(v));
 debugFolder.add({ log: () => debug.logReport(lightRig.lights) }, 'log')
   .name('Log report to console');
 debugFolder.open();

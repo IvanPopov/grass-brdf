@@ -77,8 +77,15 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   // ── Physical / colorimetric ───────────────────────────────────────────────
   const phys = gui.addFolder('Physical');
-  phys.add(params, 'colorTempK', 3_000, 7_000, 100)
-    .name('CCT  [K]  (FIFA: 5600 = daylight)')
+  // Range 1 500–12 000 K covers:
+  //   1 500  – candlelight / very warm tungsten
+  //   3 000  – halogen stadium lamp (older rigs)
+  //   4 000  – metal-halide
+  //   5 600  – FIFA Class V daylight target (D55)
+  //   6 500  – D65 standard daylight
+  //  12 000  – clear blue sky
+  phys.add(params, 'colorTempK', 1_500, 12_000, 100)
+    .name('CCT  [K]  (FIFA: 5600 = daylight, D55)')
     .onChange(onChange);
   // cri and maintenanceFactor are reserved for the illuminance sensor module
   // (see config.ts for full descriptions).

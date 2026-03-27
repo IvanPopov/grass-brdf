@@ -29,6 +29,15 @@ uniform int       lightCount;
 uniform float     iesExponent;
 // Linear-space grass colour (sRGB→linear in FieldMaterial.ts).
 uniform vec3      baseColor;
+// CCT tint — luminance-normalised linear-light RGB (Y = 1.0).
+// Normalisation ensures that changing CCT shifts chromaticity (warm/cool hue)
+// without changing perceived brightness.  Photometric intensity [cd] is
+// independent of spectral distribution, so E_h [lux] must not change with CCT.
+uniform vec3      lightColor;
+
+// Lighting-only debug mode.  1.0 = replace grass with 18% neutral grey so the
+// pure illumination distribution (no surface colour bias) is visible.
+uniform float     lightingOnly;
 
 in  vec3 vWorldPos;
 out vec4 fragColor;
@@ -90,9 +99,15 @@ void main() {
     Eh += intensity * bf * cosInc / r2;
   }
 
-  // Lambertian: L = color_lin / π × E_h
+  // In lighting-only mode, swap grass colour for 18% neutral grey (standard
+  // photographic reference reflectance) so the illumination distribution is
+  // visible without any surface-colour bias.
+  vec3 surfColor = mix(baseColor, vec3(0.18), lightingOnly);
+
+  // Lambertian: L = surfColor × lightColor / π × E_h
+  // lightColor is luminance-normalised so CCT changes hue, not brightness.
   // toneMapping() applies toneMappingExposure internally — do not multiply here.
-  vec3 linear = baseColor * (1.0 / 3.14159265) * Eh;
+  vec3 linear = surfColor * lightColor * (1.0 / 3.14159265) * Eh;
 
   #if defined( TONE_MAPPING )
     linear = toneMapping( linear );
