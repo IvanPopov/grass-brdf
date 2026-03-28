@@ -167,8 +167,9 @@ function bladeNormalMeadow(out: THREE.Vector3, thetaRad: number, psiRad: number)
 }
 
 /**
- * Mowing/stadium normal: field.frag.glsl uses world X stripes; on the small patch we use
- * two halves along X when patchHalfMow is true so both lean directions are visible.
+ * Mowing/stadium normal: mower travels in X, stripes run in X indexed by Z.
+ * On the small patch patchHalfMow splits front/back in Z so both lean directions
+ * are visible simultaneously.
  */
 function bladeNormalMowed(
   out: THREE.Vector3,
@@ -179,7 +180,7 @@ function bladeNormalMowed(
   patchHalfMow: boolean,
 ): THREE.Vector3 {
   if (!stripesEnabled) {
-    return out.set(Math.sin(tiltRad), Math.cos(tiltRad), 0);
+    return out.set(0, Math.cos(tiltRad), Math.sin(tiltRad));
   }
   let leanSign: number;
   if (patchHalfMow) {
@@ -189,7 +190,7 @@ function bladeNormalMowed(
     const stripeParity = ((stripeIdx % 2) + 2) % 2;
     leanSign = stripeParity === 0 ? -1 : 1;
   }
-  return out.set(leanSign * Math.sin(tiltRad), Math.cos(tiltRad), 0);
+  return out.set(0, Math.cos(tiltRad), leanSign * Math.sin(tiltRad));
 }
 
 /**

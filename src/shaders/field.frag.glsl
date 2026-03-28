@@ -324,25 +324,25 @@ float fresnelSchlick(float cosTheta, float F0) {
 // SECTION 5 — BRDF EVALUATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Transverse mowing: mower travels goal-to-goal in the X direction.
+// Transverse mowing: mower travels across the pitch in the Z direction.
 // Stripes run parallel to the goal lines (in Z direction), indexed by X.
-// Adjacent stripes lean in opposite X directions, giving the alternating
-// lighter/darker appearance seen on broadcast TV.
+// Adjacent stripes (different X bands) lean in opposite Z directions, giving
+// the alternating lighter/darker appearance seen on broadcast TV.
 //
-// N_blade = (leanSign × sin(tiltRad), cos(tiltRad), 0)
-// For tiltRad = 70°: N_blade = (±0.940, 0.342, 0)
+// N_blade = (0, cos(tiltRad), leanSign × sin(tiltRad))
+// For tiltRad = 70°: N_blade = (0, 0.342, ±0.940)
 //
 // Key properties:
 //   bNdotV from directly overhead (V=(0,1,0)):
 //     = cos(tiltRad) ≈ 0.342 for BOTH stripe types → equal, no stripe contrast.
 //     This is physically correct: stripe pattern is invisible from above.
-//   bNdotV from oblique X view (camera to the side of the long axis):
+//   bNdotV from oblique Z view (goal-end or broadcast camera):
 //     one set of stripes has higher bNdotV → visible stripe contrast. ✓
-//   bNdotV is independent of V.z → no "curtain" asymmetry when rotating
+//   bNdotV is independent of V.x → no "curtain" asymmetry when rotating
 //     from one touchline camera to the opposite. ✓
 //
-// Stripe boundary at X=0 (field centre): stripe −1 meets stripe 0 with
-// opposite lean → maximum contrast at centre line.  Layout is symmetric.
+// Stripe boundary at X=0 (field centre line): stripe −1 meets stripe 0 with
+// opposite lean → maximum contrast at centre. Layout is symmetric.
 
 float hashAzimuth(vec2 xz) {
     vec2 c = floor(xz * 2.0);
@@ -361,7 +361,7 @@ vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
     float stripeIdx = floor(worldX / mowingStripeWidth);
     float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
     float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
-    return vec3(leanSign * sin(tiltRad), cos(tiltRad), 0.0);
+    return vec3(0.0, cos(tiltRad), leanSign * sin(tiltRad));
 }
 
 vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad) {
@@ -550,21 +550,21 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M) {
 
         vec3 H = normalize(L + V);
 
-        // Blade tangent T: project mowing travel direction (world X) onto blade plane.
+        // Blade tangent T: project mowing travel direction (world Z) onto blade plane.
         //
-        // The mower travels in X (goal-to-goal), so blade longitudinal ridges align
-        // with X.  We project X onto the blade plane because N_blade has an X component.
+        // The mower travels in Z (across the pitch), so blade longitudinal ridges align
+        // with Z.  We project Z onto the blade plane because N_blade has a Z component.
         //
-        // For N_blade = (leanSign·sin θ, cos θ, 0):
-        //   dot(N_blade, X̂) = leanSign · sin θ
-        //   T = normalize(X̂ − N_blade · leanSign·sin θ)
-        //     = normalize(cos²θ, −leanSign·cos θ·sin θ, 0)
-        //     = (cos θ, −leanSign·sin θ, 0)                   [verified analytically]
-        //   B = cross(N_blade, T) = (0, 0, −1)                [exact, both lean signs]
+        // For N_blade = (0, cos θ, leanSign·sin θ):
+        //   dot(N_blade, Ẑ) = leanSign · sin θ
+        //   T = normalize(Ẑ − N_blade · leanSign·sin θ)
+        //     = normalize(0, −leanSign·cos θ·sin θ, cos²θ)
+        //     = (0, −leanSign·sin θ, cos θ)                   [verified analytically]
+        //   B = cross(N_blade, T) = (1, 0, 0)                 [exact, both lean signs]
         //
-        // alphaT (0.15, sharp) along T ≈ X → streak follows mowing direction. ✓
-        // alphaB (0.60, broad) along B = −Z → wide lobe across the pitch width. ✓
-        vec3 mowDir = vec3(1.0, 0.0, 0.0);
+        // alphaT (0.15, sharp) along T ≈ Z → streak follows mowing direction. ✓
+        // alphaB (0.60, broad) along B = X → wide lobe along the pitch length. ✓
+        vec3 mowDir = vec3(0.0, 0.0, 1.0);
         vec3 T = normalize(mowDir - N_blade * dot(N_blade, mowDir));
         vec3 B = cross(N_blade, T);
 
