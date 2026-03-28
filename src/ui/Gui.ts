@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import { LightRigParams, MAX_SHADER_LIGHTS } from '../config';
+import { LightRigParams, MAX_SHADER_LIGHTS, BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG } from '../config';
 import { GroupPhysics } from '../lighting/LightRig';
 
 /** Read-only computed display updated after each rebuild. */
@@ -97,7 +97,7 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
   );
 
   tip(
-    fix.add(params, 'beamAngleDeg', 8, 45, 0.5)
+    fix.add(params, 'beamAngleDeg', BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG, 0.5)
       .name('Ref. beam angle  [deg]')
       .onChange(onChange),
     'Reference beam angle for a nominal 70 m throw distance.\n' +

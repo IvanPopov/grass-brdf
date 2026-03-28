@@ -34,6 +34,7 @@ struct LightData {
     vec3  target;
     float intensity;
     float angleH;
+    float penumbra;      // soft-edge fraction of cone [0–1]; used when iesExponent = 0
     float angleV;
     float visorTan;
     float visorPenumbra; // soft-edge fraction [0–1]; 0 = hard cut, 1 = full fade over full angle
@@ -65,6 +66,7 @@ LightData readLight(int i) {
     ld.target    = r1.xyz;
     ld.intensity = r2.x;
     ld.angleH    = r2.y;
+    ld.penumbra  = r2.z;
     ld.angleV    = r2.w;
     ld.visorTan      = r3.x;
     ld.visorPenumbra = r3.y;
@@ -89,12 +91,23 @@ bool buildLocalFrame(vec3 lpos, vec3 ltgt, out LocalFrame frame) {
 //   bf  = w^n * (n+1)    for n > 0  (flux integral = 1 over [0,1])
 //   bf  = smoothstep(w)  for n = 0  (Three.js default, flat-top with soft edge)
 //
-// cosToPoint = cos(angle from beam axis to fragment direction) = dzLocal.
-// cosOuter   = cos(angleH) — edge of the beam cone.
-float iesBeamFactor(float cosToPoint, float cosOuter, float n) {
+// cosToPoint  = cos(angle from beam axis to fragment direction) = dzLocal.
+// angleH      = cone half-angle [rad].
+// penumbra    = soft-edge fraction [0–1]; only used when n = 0.
+// n           = IES beam exponent (iesExponent uniform).
+//
+// n = 0  — Three.js SpotLight standard: smoothstep from outer edge (cosOuter, I=0)
+//           to inner edge (cosInner = cos(angleH * (1-penumbra)), I=1).
+//           penumbra = 0 → hard cutoff.  penumbra = 1 → full-cone gradient.
+// n > 0  — Power-cosine IES profile; penumbra is not used.
+float iesBeamFactor(float cosToPoint, float angleH, float penumbra, float n) {
+    float cosOuter = cos(angleH);
+    if (n <= 0.0) {
+        float cosInner = cos(angleH * (1.0 - penumbra));
+        return smoothstep(cosOuter, cosInner, cosToPoint);
+    }
     float w = max(0.0, (cosToPoint - cosOuter) / (1.0 - cosOuter));
-    if (n > 0.0) return pow(w, n) * (n + 1.0);
-    return w * w * (3.0 - 2.0 * w); // smoothstep
+    return pow(w, n) * (n + 1.0);
 }
 
 // Illuminance contribution [lux · m²] from one fixture to one fragment.
@@ -156,7 +169,7 @@ float lightContribution(LightData ld, vec3 fragPos, float n) {
     float v    = dyLocal / tanV;
     if (u*u + v*v >= 1.0) return 0.0;
 
-    float bf = iesBeamFactor(dzLocal, cos(ld.angleH), n);
+    float bf = iesBeamFactor(dzLocal, ld.angleH, ld.penumbra, n);
 
     // E_h [lux] = I [cd] * bf * visorFade * cosInc / r^2
     return ld.intensity * bf * visorFade * cosInc / r2;

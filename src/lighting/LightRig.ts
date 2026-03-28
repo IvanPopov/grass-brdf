@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LightRigParams, FIELD_W, FIELD_H } from '../config';
+import { LightRigParams, FIELD_W, FIELD_H, BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG } from '../config';
 import { cctToColor } from './colorTemp';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,11 +312,10 @@ export class LightRig {
       const throwDist = pos.distanceTo(aim);
       
       // Dynamic beam angle: narrow for far throws, wide for near throws.
-      // clamped between 15° (very narrow) and 45° (very wide) to stay realistic.
       const dynamicBeamDeg = THREE.MathUtils.clamp(
         params.beamAngleDeg * (REFERENCE_THROW / throwDist),
-        15,
-        45,
+        BEAM_ANGLE_MIN_DEG,
+        BEAM_ANGLE_MAX_DEG,
       );
       const dynamicHalfAngle = THREE.MathUtils.degToRad(dynamicBeamDeg / 2);
 

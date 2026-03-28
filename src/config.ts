@@ -2,6 +2,12 @@
 export const FIELD_W = 105; // [m] pitch length — long axis (X)
 export const FIELD_H = 68;  // [m] pitch width  — short axis (Z)
 
+// Dynamic beam angle limits applied in LightRig and the GUI slider.
+// Minimum 10° matches the narrowest long-throw stadium LED fixtures.
+// Maximum 45° is the widest practical beam for a high-mount rig.
+export const BEAM_ANGLE_MIN_DEG = 10;
+export const BEAM_ANGLE_MAX_DEG = 45;
+
 /**
  * Maximum total SpotLights the GPU field shader can process per frame.
  * Constrained by DataTexture capacity in FieldMaterial (width = this value).
