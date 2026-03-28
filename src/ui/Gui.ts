@@ -296,10 +296,11 @@ export function buildGui(
       .name('LAD χ  [—]')
       .onChange(onGrassChange),
     'Campbell (1990) ellipsoidal LAD parameter χ:\n' +
-    '  χ < 1: erectophile (erect leaves) — typical for grass\n' +
-    '  χ = 1: spherical (random, G = 0.5)\n' +
-    '  χ > 1: planophile (flat leaves, crops)\n' +
-    'Lolium perenne: χ ≈ 0.4–0.6  [Lemaire & Chapman 1996].',
+    '  χ < 1: erectophile (more vertical blades) — turf grasses, cereals\n' +
+    '  χ = 1: spherical inclination distribution\n' +
+    '  χ > 1: planophile (more horizontal laminae) — e.g. many broadleaf crops\n' +
+    'Stadium BRDF: χ drives G(θ) for diffuse canopy. Patch blades: χ changes\n' +
+    'Campbell zenith sampling only when Mowing direction is near 0.',
   );
 
   tip(
@@ -339,13 +340,21 @@ export function buildGui(
   );
 
   tip(
+    canopy.add(grassParams, 'bladeDirectionalWeight', 0.0, 1.0, 0.05)
+      .name('Mowing direction  [0–1]')
+      .onChange(onGrassChange),
+    'Blade-face specular normal: 0 = meadow (isotropic azimuth, Campbell mean tilt from chi).\n' +
+    '1 = stadium mowing (bladeTiltDeg and stripes). Intermediate values blend.\n' +
+    'Diffuse canopy (Ross, gaps, MS) always uses chiLAD only.',
+  );
+
+  tip(
     canopy.add(grassParams, 'bladeTiltDeg', 30, 89, 1)
       .name('Blade tilt  [deg]')
       .onChange(onGrassChange),
-    'Mean blade tilt angle from horizontal [degrees].\n' +
-    'Higher = more erect blades → stronger stripe contrast.\n' +
-    'Typical post-cut: 60–80°.  Flattened (rain, play): 40–55°.\n' +
-    'At 70°: front stripe reflectance ≈ 2.1× back stripe.',
+    'Mowing lean: blade face tilt from vertical toward +X [degrees].\n' +
+    'Used when Mowing direction > 0. At 0: meadow specular uses Campbell mean tilt from chi.\n' +
+    'Typical post-cut: 60–80°.  Flattened (rain, play): 40–55°.',
   );
 
   const leafOpt = grass.addFolder('Leaf optics (linear sRGB)');

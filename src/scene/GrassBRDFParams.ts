@@ -198,11 +198,14 @@ export interface GrassBRDFParams {
    *
    * [Camp90] models the leaf inclination angle distribution (LAD) as an
    * ellipsoidal distribution with parameter χ:
-   *   χ = 1   → spherical (random): G(θ) = 0.5 for all zenith angles
+   *   χ = 1   → spherical leaf normals (isotropic orientation)
    *   χ > 1   → planophile (horizontal leaves)
    *   χ < 1   → erectophile (erect leaves — typical for grass)
    *
-   * G(θ) = sqrt((χ cosθ)² + sin²θ) / M(χ)
+   * In the BRDF shader, G(θ) uses θ as the zenith angle of the ILLUMINATION / VIEW
+   * ray (beam through the canopy), not the zenith angle of a leaf normal. It is the
+   * mean projected leaf area for that beam direction [Camp90 eq. 11]:
+   *   G_beam(θ) = sqrt((χ cosθ)² + sin²θ) / M(χ)
    * M(χ) = χ + 1.702 × (χ + 1.12)^(−0.708)  [Camp90 eq. 5]
    *
    * ── Measured values ──
@@ -224,6 +227,18 @@ export interface GrassBRDFParams {
    * Error of ellipsoidal approximation vs. true measured LAD for ryegrass:
    *   < 6% for G(θ) at 10° < θ < 70°  [Camp90 validation, §3]
    *   Up to 12% at θ < 10° (near-nadir, blade silhouettes dominate).
+   *
+   * ── Biological intuition (examples) ──
+   * χ < 1 (erectophile): blades tend toward vertical — short turf (Lolium, Festuca,
+   * Poa), young cereal leaves, many pasture grasses.
+   * χ ≈ 1: inclination spread similar to a sphere — mixed herbaceous canopies.
+   * χ > 1 (planophile): preferentially more horizontal laminae — soybean, many
+   * broadleaf crops, dense shade-grown layers.
+   *
+   * ── Patch preview (GrassBRDFPatchView) ──
+   * χ drives sampleZenithFromCampbell when bladeDirectionalWeight is near 0 (meadow
+   * blade orientations). When bladeDirectionalWeight is near 1, patch blades follow
+   * bladeTiltDeg and mowing only; χ still affects the stadium BRDF diffuse terms via G(θ).
    */
   chiLAD: number;
 
@@ -553,7 +568,25 @@ export interface GrassBRDFParams {
   mowingStripesEnabled: boolean;
 
   /**
-   * Blade tilt angle from horizontal [degrees].
+   * How strongly blade-face normals align with the mowed/stadium pattern [0, 1].
+   *
+   *   0 = meadow (isotropic): azimuth of the blade face is uniform on [0, 2 pi);
+   *       tilt from vertical for specular uses the Campbell (1990) ellipsoidal LAD
+   *       mean zenith angle from chiLAD (no fixed bladeTiltDeg).
+   *   1 = stadium mowing: same as the legacy model — normals follow bladeTiltDeg and
+   *       mowing stripes (alternating lean along world +X when stripes are enabled).
+   *
+   * Intermediate values linearly blend the two unit normals before specular GGX.
+   * Diffuse canopy terms (Ross single-scatter, gaps, MS) still use chiLAD only.
+   */
+  bladeDirectionalWeight: number;
+
+  /**
+   * Blade tilt angle from vertical toward world +X [degrees] (mowing lean).
+   *
+   * Used only when bladeDirectionalWeight is sufficiently large (mowing-dominated
+   * specular). At bladeDirectionalWeight = 0 (meadow), specular tilt comes from the
+   * Campbell distribution mean implied by chiLAD instead of this angle.
    *
    * ── Physical basis ──
    * The mowing roller (cylinder mower) tilts blades as it passes.
@@ -678,6 +711,9 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   mowingStripeWidth: 5.4,
 
   mowingStripesEnabled: true,
+
+  // 0 = isotropic meadow normals for specular; 1 = full mowing/stadium alignment
+  bladeDirectionalWeight: 0.0,
 
   // Post-cut Lolium perenne on FIFA match day: 65–75°; shadertoy equivalent: 48.7°
   bladeTiltDeg: 70.0,

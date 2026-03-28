@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MAX_SHADER_LIGHTS } from '../config';
 import { GrassBRDFParams, GrassBRDFDebug } from './GrassBRDFParams';
+import { estimateMeanZenithRad } from '../math/campbellInclination';
 import fieldVertGlsl from '../shaders/field.vert.glsl';
 import fieldFragGlsl from '../shaders/field.frag.glsl';
 
@@ -27,6 +28,10 @@ export class FieldMaterial {
   private readonly texData: Float32Array;
   private readonly texture: THREE.DataTexture;
   private readonly uniforms: Record<string, THREE.IUniform>;
+
+  /** Cached mean Campbell zenith [rad]; recomputed when chiLAD changes. */
+  private cachedChiLAD = Number.NaN;
+  private cachedMeanZenithRad = 0.0;
 
   constructor() {
     const ML = FieldMaterial.MAX_LIGHTS;
@@ -65,8 +70,10 @@ export class FieldMaterial {
       chiLAD:       { value: 0.5 },
       bladeRL:      { value: 0.004 / 0.027 }, // bladeWidthM / bladeHeightM
 
-      // Blade face tilt for mowing stripe specular
+      // Blade face tilt for mowing stripe specular (toward +X, angle from vertical)
       bladeTiltRad: { value: 70.0 * Math.PI / 180.0 },
+      bladeCampbellMeanTiltRad: { value: 0.7 },
+      bladeDirectionalWeight: { value: 0.0 },
 
       // Leaf optical properties (linear sRGB)
       bladeAlbedo: { value: new THREE.Vector3(0.045, 0.115, 0.025) },
@@ -193,6 +200,13 @@ export class FieldMaterial {
     u['chiLAD'].value           = p.chiLAD;
     u['bladeRL'].value          = p.bladeWidthM / p.bladeHeightM;
     u['bladeTiltRad'].value     = p.bladeTiltDeg * Math.PI / 180.0;
+
+    if (p.chiLAD !== this.cachedChiLAD) {
+      this.cachedMeanZenithRad = estimateMeanZenithRad(p.chiLAD);
+      this.cachedChiLAD        = p.chiLAD;
+    }
+    u['bladeCampbellMeanTiltRad'].value = this.cachedMeanZenithRad;
+    u['bladeDirectionalWeight'].value   = THREE.MathUtils.clamp(p.bladeDirectionalWeight, 0.0, 1.0);
 
     const ba = u['bladeAlbedo'].value as THREE.Vector3;
     ba.set(p.bladeAlbedoR, p.bladeAlbedoG, p.bladeAlbedoB);

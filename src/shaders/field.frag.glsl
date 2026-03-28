@@ -32,11 +32,15 @@ uniform float isSurfaceGrass;
 // ── Canopy structure ──────────────────────────────────────────────────────────
 // lai: Leaf Area Index [m²/m²].  chiLAD: Campbell ellipsoidal LAD parameter.
 // bladeRL: rL = bladeWidth / bladeHeight (hot-spot angular scale).
-// bladeTiltRad: blade face tilt angle from horizontal [rad] (mowing angle).
+// bladeTiltRad: blade face tilt from vertical toward +X [rad] (mowing lean).
+// bladeCampbellMeanTiltRad: mean zenith [rad] from Campbell LAD (meadow specular).
+// bladeDirectionalWeight: 0 = isotropic meadow normals, 1 = mowed/stadium normals.
 uniform float lai;
 uniform float chiLAD;
 uniform float bladeRL;
 uniform float bladeTiltRad;
+uniform float bladeCampbellMeanTiltRad;
+uniform float bladeDirectionalWeight;
 
 // ── Leaf optical properties [linear sRGB, 0–1] ───────────────────────────────
 // bladeAlbedo: per-leaf reflectance ρ_leaf.
@@ -217,8 +221,9 @@ float campbellM(float chi) {
 }
 
 // Projection function G(θ, χ) from [Camp90, eq. 11].
+// θ is the zenith angle of the VIEW / ILLUMINATION ray (not a leaf-normal angle).
 // G is the mean projection of unit leaf area onto a plane perpendicular to
-// direction θ:  G = sqrt((χ cosθ)² + sin²θ) / M(χ)
+// that beam:  G = sqrt((χ cosθ)² + sin²θ) / M(χ)
 //
 // Limits: G(0°) = χ/M  (zenith, looking straight up/down through canopy)
 //         G(90°) = 1/M (horizon)
@@ -338,12 +343,32 @@ float fresnelSchlick(float cosTheta, float F0) {
 //
 // Stripe boundary at X=0 (field centre): stripe −1 meets stripe 0 with
 // opposite lean → maximum contrast at centre line.  Layout is symmetric.
-vec3 bladeFaceNormal(float worldX, float tiltRad) {
+
+float hashAzimuth(vec2 xz) {
+    vec2 c = floor(xz * 2.0);
+    return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Isotropic azimuth psi in [0, 2 pi); tilt theta = Campbell mean zenith (blade face from vertical).
+vec3 bladeFaceNormalMeadow(vec2 worldXZ, float thetaRad) {
+    float psi = 6.28318530718 * hashAzimuth(worldXZ);
+    float sx = sin(thetaRad);
+    float cy = cos(thetaRad);
+    return vec3(sx * cos(psi), cy, -sx * sin(psi));
+}
+
+vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
     float stripeIdx = floor(worldX / mowingStripeWidth);
     float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
-    // mowingStripesEnabled = 0 → uniform +X lean (no stripe contrast); specular unchanged.
     float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
     return vec3(leanSign * sin(tiltRad), cos(tiltRad), 0.0);
+}
+
+vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad) {
+    vec3 N_me = bladeFaceNormalMeadow(worldXZ, bladeCampbellMeanTiltRad);
+    vec3 N_mo = bladeFaceNormalMowed(worldX, tiltRad);
+    float w   = clamp(bladeDirectionalWeight, 0.0, 1.0);
+    return normalize(mix(N_me, N_mo, w));
 }
 
 // Evaluate the full physical OBC grass BRDF for one light source.
@@ -593,8 +618,8 @@ void main() {
         // Campbell M coefficient: constant for this fragment (only depends on chi).
         float M = campbellM(chiLAD);
 
-        // Blade face normal: alternates per mowing stripe.
-        vec3 N_blade = bladeFaceNormal(vWorldPos.x, bladeTiltRad);
+        // Blade face normal: meadow isotropy vs mowing (see bladeDirectionalWeight).
+        vec3 N_blade = bladeFaceNormalMixed(vWorldPos.xz, vWorldPos.x, bladeTiltRad);
 
         // In lighting-only mode: override leaf and soil colours with 18% grey.
         // Temporarily modify the BRDF via uniforms equivalent by branching here.

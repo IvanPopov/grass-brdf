@@ -14,9 +14,14 @@ const MAX_BLADES = 6000;
 
 const _tmpV = new THREE.Vector3();
 const _bladeScale = new THREE.Vector3(1, 1, 1);
+const _nBlade = new THREE.Vector3();
+const _faceN = new THREE.Vector3();
+const _bladeLong = new THREE.Vector3();
+const _bladeWide = new THREE.Vector3();
+const _matBasis = new THREE.Matrix4();
 const _tmpQ = new THREE.Quaternion();
 const _tmpM = new THREE.Matrix4();
-const _faceN = new THREE.Vector3();
+const _worldUp = new THREE.Vector3(0, 1, 0);
 const _ehPoint = new THREE.Vector3(0, 0, 0);
 const _patchFwd = new THREE.Vector3();
 const _patchLookAt = new THREE.Vector3(0, 0.01, 0);
@@ -33,17 +38,63 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+/** Blade face normal: isotropic azimuth psi, zenith theta from vertical (meadow). */
+function bladeNormalMeadow(out: THREE.Vector3, thetaRad: number, psiRad: number): THREE.Vector3 {
+  const sx = Math.sin(thetaRad);
+  const cy = Math.cos(thetaRad);
+  return out.set(sx * Math.cos(psiRad), cy, -sx * Math.sin(psiRad));
+}
+
 /**
- * Blade face normal with uniform +X lean (same as shader with mowing stripes off).
- * Patch does not alternate stripes so the preview matches default tilt only.
+ * Mowing/stadium normal: field.frag.glsl uses world X stripes; on the small patch we use
+ * two halves along X when patchHalfMow is true so both lean directions are visible.
  */
-function setBladeFaceNormal(out: THREE.Vector3, tiltFromHorizontalRad: number): THREE.Vector3 {
-  const lean = 1.0;
-  return out.set(
-    lean * Math.sin(tiltFromHorizontalRad),
-    Math.cos(tiltFromHorizontalRad),
-    0.0,
-  ).normalize();
+function bladeNormalMowed(
+  out: THREE.Vector3,
+  lx: number,
+  tiltRad: number,
+  stripeWidthM: number,
+  stripesEnabled: boolean,
+  patchHalfMow: boolean,
+): THREE.Vector3 {
+  if (!stripesEnabled) {
+    return out.set(Math.sin(tiltRad), Math.cos(tiltRad), 0);
+  }
+  let leanSign: number;
+  if (patchHalfMow) {
+    leanSign = lx < 0 ? -1 : 1;
+  } else {
+    const stripeIdx = Math.floor(lx / stripeWidthM);
+    const stripeParity = ((stripeIdx % 2) + 2) % 2;
+    leanSign = stripeParity === 0 ? -1 : 1;
+  }
+  return out.set(leanSign * Math.sin(tiltRad), Math.cos(tiltRad), 0);
+}
+
+/**
+ * Box local +X = face outward normal, +Y = lamina height (root to tip). Build an
+ * orthonormal basis so blade long axis is the projection of world +Y onto the leaf
+ * plane (blade grows upward, not into the soil). setFromUnitVectors(+X, n) alone
+ * leaves arbitrary twist and often flips +Y below the ground.
+ */
+function orientationFromFaceNormal(q: THREE.Quaternion, nRaw: THREE.Vector3): void {
+  _faceN.copy(nRaw).normalize();
+  if (_faceN.y < 0) {
+    _faceN.negate();
+  }
+  _bladeLong.copy(_worldUp).addScaledVector(_faceN, -_worldUp.dot(_faceN));
+  if (_bladeLong.lengthSq() < 1e-14) {
+    _bladeLong.set(1, 0, 0).addScaledVector(_faceN, -_faceN.x);
+  }
+  if (_bladeLong.lengthSq() < 1e-14) {
+    _bladeLong.set(0, 0, 1).addScaledVector(_faceN, -_faceN.z);
+  }
+  _bladeLong.normalize();
+  _bladeWide.crossVectors(_faceN, _bladeLong).normalize();
+  _bladeLong.crossVectors(_bladeWide, _faceN).normalize();
+  _bladeWide.crossVectors(_faceN, _bladeLong).normalize();
+  _matBasis.makeBasis(_faceN, _bladeLong, _bladeWide);
+  q.setFromRotationMatrix(_matBasis);
 }
 
 function linearAlbedoToColor(
@@ -91,7 +142,8 @@ export class GrassBRDFPatchView {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
 
-  private readonly ground: THREE.Mesh;
+  private readonly groundLeft: THREE.Mesh;
+  private readonly groundRight: THREE.Mesh;
   private readonly instancedBlades: THREE.InstancedMesh;
   private readonly dirLight: THREE.DirectionalLight;
   private readonly ambLight: THREE.AmbientLight;
@@ -112,19 +164,29 @@ export class GrassBRDFPatchView {
     this.camera.position.set(0.35, 0.42, 0.35);
     this.camera.lookAt(0, 0.02, 0);
 
-    const groundGeo = new THREE.BoxGeometry(GRASS_PATCH_SIZE_M, 0.008, GRASS_PATCH_SIZE_M);
-    groundGeo.translate(0, -0.004, 0);
-    const groundMat = new THREE.MeshStandardMaterial({
+    const gw = GRASS_PATCH_SIZE_M * 0.5;
+    const gd = 0.008;
+    const gh = -0.004;
+    const groundGeoL = new THREE.BoxGeometry(gw, gd, GRASS_PATCH_SIZE_M);
+    groundGeoL.translate(-gw * 0.5, gh, 0);
+    const groundGeoR = new THREE.BoxGeometry(gw, gd, GRASS_PATCH_SIZE_M);
+    groundGeoR.translate(gw * 0.5, gh, 0);
+    const groundMatL = new THREE.MeshStandardMaterial({
       roughness:       0.95,
       metalness:       0.0,
       envMapIntensity: 0.0,
       toneMapped:      true,
       side:            THREE.DoubleSide,
     });
-    this.ground = new THREE.Mesh(groundGeo, groundMat);
-    this.ground.receiveShadow = true;
-    this.ground.castShadow = false;
-    this.scene.add(this.ground);
+    const groundMatR = groundMatL.clone();
+    this.groundLeft = new THREE.Mesh(groundGeoL, groundMatL);
+    this.groundRight = new THREE.Mesh(groundGeoR, groundMatR);
+    this.groundLeft.receiveShadow = true;
+    this.groundRight.receiveShadow = true;
+    this.groundLeft.castShadow = false;
+    this.groundRight.castShadow = false;
+    this.scene.add(this.groundLeft);
+    this.scene.add(this.groundRight);
 
     const bladeGeo = new THREE.BoxGeometry(0.0008, 0.03, 0.004);
     bladeGeo.translate(0, 0.015, 0);
@@ -186,6 +248,7 @@ export class GrassBRDFPatchView {
       sw:  grass.mowingStripeWidth,
       ms:  grass.mowingStripesEnabled,
       bt:  grass.bladeTiltDeg,
+      bdw: grass.bladeDirectionalWeight,
       ar:  grass.bladeAlbedoR,
       ag:  grass.bladeAlbedoG,
       ab:  grass.bladeAlbedoB,
@@ -208,8 +271,22 @@ export class GrassBRDFPatchView {
     let n = Math.round((grass.lai * patchArea) / bladeOneSidedArea);
     n = Math.max(12, Math.min(MAX_BLADES, n));
 
-    const gw = this.ground.material as THREE.MeshStandardMaterial;
-    linearAlbedoToColor(grass.soilAlbedoR, grass.soilAlbedoG, grass.soilAlbedoB, gw.color);
+    const wDir = THREE.MathUtils.clamp(grass.bladeDirectionalWeight, 0, 1);
+    const showMowHalves = grass.mowingStripesEnabled && wDir > 1e-5;
+
+    const matL = this.groundLeft.material as THREE.MeshStandardMaterial;
+    const matR = this.groundRight.material as THREE.MeshStandardMaterial;
+    linearAlbedoToColor(grass.soilAlbedoR, grass.soilAlbedoG, grass.soilAlbedoB, matL.color);
+    linearAlbedoToColor(grass.soilAlbedoR, grass.soilAlbedoG, grass.soilAlbedoB, matR.color);
+    if (showMowHalves) {
+      matL.color.multiplyScalar(0.94);
+      matR.color.multiplyScalar(1.06);
+      matL.roughness = 0.96;
+      matR.roughness = 0.92;
+    } else {
+      matL.roughness = 0.95;
+      matR.roughness = 0.95;
+    }
 
     const bm = this.instancedBlades.material as THREE.MeshStandardMaterial;
     linearAlbedoToColor(grass.bladeAlbedoR, grass.bladeAlbedoG, grass.bladeAlbedoB, bm.color);
@@ -228,7 +305,9 @@ export class GrassBRDFPatchView {
     const cols = Math.ceil(Math.sqrt(n));
     const rows = Math.ceil(n / cols);
 
-    const tiltRad = (grass.bladeTiltDeg * Math.PI) / 180;
+    const tiltMowRad = THREE.MathUtils.degToRad(grass.bladeTiltDeg);
+    const patchStripeW = Math.max(0.04, Math.min(grass.mowingStripeWidth, GRASS_PATCH_SIZE_M * 0.45));
+    const patchHalfMow = showMowHalves;
     const chi = grass.chiLAD;
 
     let i = 0;
@@ -240,17 +319,13 @@ export class GrassBRDFPatchView {
         const lz = (v - 0.5) * 2 * half;
         const rnd = mulberry32((i + 1) * 0x9e3779b9);
 
-        const zSample = sampleZenithFromCampbell(chi, rnd);
-        const spreadDeg = (7 / Math.max(0.2, chi)) * (rnd() - 0.5) * 2;
-        let tiltEffRad =
-          tiltRad +
-          THREE.MathUtils.degToRad(spreadDeg) * 0.4 +
-          (zSample - Math.PI / 4) * 0.1;
-        tiltEffRad = THREE.MathUtils.clamp(tiltEffRad, 0.25, 1.48);
+        const thetaCamp = sampleZenithFromCampbell(chi, rnd);
+        const psi = rnd() * Math.PI * 2;
+        bladeNormalMeadow(_tmpV, thetaCamp, psi);
+        bladeNormalMowed(_faceN, lx, tiltMowRad, patchStripeW, grass.mowingStripesEnabled, patchHalfMow);
+        _nBlade.copy(_tmpV).lerp(_faceN, wDir).normalize();
 
-        const nBlade = setBladeFaceNormal(_faceN, tiltEffRad);
-
-        _tmpQ.setFromUnitVectors(_tmpV.set(1, 0, 0), nBlade);
+        orientationFromFaceNormal(_tmpQ, _nBlade);
 
         _tmpM.compose(_tmpV.set(lx, 0, lz), _tmpQ, _bladeScale);
         this.instancedBlades.setMatrixAt(i, _tmpM);
@@ -275,11 +350,12 @@ export class GrassBRDFPatchView {
 
     const eh = sampleEh(lights, _ehPoint, iesExponent);
     const ehEff = Math.max(eh, 400);
-    const lux = THREE.MathUtils.clamp(ehEff * 0.35, 500, 14000);
+    const lux = THREE.MathUtils.clamp(ehEff * 0.7, 800, 22000);
     this.dirLight.intensity = lux;
 
     const msAmb = ambientMultiplierFromMS(grass);
-    this.ambLight.intensity = 0.1 + msAmb;
+    this.ambLight.intensity = 0.14 + msAmb;
+    this.hemi.intensity = 0.22;
   }
 
   /**
