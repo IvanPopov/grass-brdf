@@ -1,7 +1,7 @@
 import GUI from 'lil-gui';
 import { LightRigParams, MAX_SHADER_LIGHTS, BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG } from '../config';
 import { GroupPhysics } from '../lighting/LightRig';
-import { GrassBRDFDebug, GrassBRDFParams } from '../scene/GrassBRDFParams';
+import { GrassBRDFDebug, GrassBRDFParams, GrassPatchDebug } from '../scene/GrassBRDFParams';
 
 /** Read-only computed display updated after each rebuild. */
 interface ComputedDisplay {
@@ -34,6 +34,7 @@ export function buildGui(
   onChange: () => void,
   grassParams: GrassBRDFParams,
   grassDebug: GrassBRDFDebug,
+  patchDebug: GrassPatchDebug,
   onGrassChange: () => void,
 ): GuiHandle {
   const gui = new GUI({ title: 'Stadium Lighting (FIFA Class V)' });
@@ -511,6 +512,15 @@ export function buildGui(
     'Serrated margins and cell boundaries create higher roughness across blade.\n' +
     'Koch et al. 2009: effective αB ≈ 0.50–0.70.\n' +
     'Higher value = broader, more diffuse specular in the perpendicular direction.',
+  );
+
+  const patchDbg = gui.addFolder('Grass patch (debug)');
+  patchDbg.close();
+  tip(
+    patchDbg.add(patchDebug, 'gtao').name('GTAO'),
+    'Screen-space GTAO on the lower-left MeshStandard turf patch only.\n' +
+    'Does not affect field.frag.glsl. Uses the same ACES + sRGB path as the main view.\n' +
+    'Turn off to save GPU when the patch is not needed.',
   );
 
   return { gui, updateComputedDisplay };

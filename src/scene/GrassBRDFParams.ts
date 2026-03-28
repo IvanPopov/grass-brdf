@@ -652,6 +652,16 @@ export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
   dbgSpecular: true,
 };
 
+/** Debug toggles for the lower-left MeshStandard turf patch only (not field.frag.glsl). */
+export interface GrassPatchDebug {
+  /** Ground-truth ambient occlusion pass on the patch (EffectComposer + GTAOPass). */
+  gtao: boolean;
+}
+
+export const DEFAULT_PATCH_DEBUG: GrassPatchDebug = {
+  gtao: true,
+};
+
 /**
  * Default parameters calibrated to a FIFA-standard natural grass pitch:
  *   - Lolium perenne (perennial ryegrass), 27 mm cutting height

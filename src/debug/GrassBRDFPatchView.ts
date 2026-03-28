@@ -1,4 +1,24 @@
 import * as THREE from 'three';
+import {
+  ACESFilmicToneMapping,
+  AgXToneMapping,
+  CineonToneMapping,
+  ColorManagement,
+  LinearToneMapping,
+  NeutralToneMapping,
+  RawShaderMaterial,
+  ReinhardToneMapping,
+  SRGBTransfer,
+  UniformsUtils,
+  type IUniform,
+  type ToneMapping,
+  type WebGLRenderer,
+  type WebGLRenderTarget,
+} from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GrassBRDFParams } from '../scene/GrassBRDFParams';
 import { cctToColor } from '../lighting/colorTemp';
 import { sampleEh } from './IlluminanceSampler';
@@ -135,7 +155,10 @@ function ambientMultiplierFromMS(grass: GrassBRDFParams): number {
  * albedo; blades use leaf albedo. Directional light intensity is scaled from
  * horizontal illuminance at field centre (sampleEh).
  *
- * GTAO: not wired (would require EffectComposer + GTAOPass on a render target).
+ * Optional GTAO: EffectComposer + RenderPass + GTAOPass in the
+ * patch viewport only. Hemisphere sky colour is slightly mixed toward blade
+ * albedo when the MS-derived ambient term is large (rough diffuse inter-reflection
+ * cue; not a substitute for Sellers two-stream in field.frag.glsl).
  * Contact shading uses directional shadow map on the patch only.
  */
 export class GrassBRDFPatchView {
@@ -155,6 +178,14 @@ export class GrassBRDFPatchView {
 
   /** Cached CCT tint; updated with stadium lights. */
   private readonly lightTint = new THREE.Color();
+
+  /** Blade albedo target for MS-like hemisphere fill (reused, no per-frame alloc). */
+  private readonly msBladeFill = new THREE.Color();
+
+  private patchComposer: EffectComposer | null = null;
+  private patchGtaoPass: GTAOPass | null = null;
+  private patchTonemapPass: PatchTonemapPass | null = null;
+  private patchComposerVp = 0;
 
   constructor() {
     this.scene = new THREE.Scene();
@@ -229,9 +260,92 @@ export class GrassBRDFPatchView {
 
   setScreenSize(widthPx: number, heightPx: number): void {
     const area = widthPx * heightPx * VIEWPORT_AREA_FRACTION;
-    this.viewportPx = Math.max(120, Math.floor(Math.sqrt(area)));
+    const next = Math.max(120, Math.floor(Math.sqrt(area)));
+    if (next !== this.viewportPx) {
+      this.disposePatchComposer();
+    }
+    this.viewportPx = next;
     this.camera.aspect = 1;
     this.camera.updateProjectionMatrix();
+  }
+
+  private disposePatchComposer(): void {
+    this.patchTonemapPass?.dispose();
+    this.patchTonemapPass = null;
+    this.patchGtaoPass?.dispose();
+    this.patchComposer?.dispose();
+    this.patchComposer = null;
+    this.patchGtaoPass = null;
+    this.patchComposerVp = 0;
+  }
+
+  /**
+   * Builds or rebuilds the patch EffectComposer when viewport size changes.
+   * GTAOPass internal buffers match the scissored patch resolution (not full window).
+   */
+  private ensurePatchComposer(renderer: THREE.WebGLRenderer, vp: number): void {
+    if (this.patchComposer && this.patchComposerVp === vp) {
+      return;
+    }
+    this.disposePatchComposer();
+    this.patchComposerVp = vp;
+
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(renderer.getPixelRatio());
+    composer.setSize(vp, vp);
+
+    const ms = Math.min(4, renderer.capabilities.maxSamples);
+    if (ms > 0) {
+      const rw = composer.renderTarget1.width;
+      const rh = composer.renderTarget1.height;
+      composer.renderTarget1.dispose();
+      composer.renderTarget2.dispose();
+      const rtOpts = {
+        type:    THREE.HalfFloatType,
+        samples: ms,
+      } as const;
+      composer.renderTarget1 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
+      composer.renderTarget2 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
+      composer.writeBuffer = composer.renderTarget1;
+      composer.readBuffer = composer.renderTarget2;
+    }
+
+    const rp = new RenderPass(this.scene, this.camera, null, new THREE.Color(0x000000), 0);
+
+    // GTAO: screen-space radius, distanceExponent in ~1-2 (three.js docs), softer falloff, blendIntensity < 1.
+    const aoParams = {
+      radius:            0.34,
+      distanceExponent:  1.35,
+      thickness:         1.35,
+      distanceFallOff:   0.88,
+      scale:               1,
+      samples:             24,
+      screenSpaceRadius:   true,
+    };
+    const pdParams = {
+      lumaPhi:   12,
+      depthPhi:  2,
+      normalPhi: 3,
+      radius:    8,
+      rings:     2,
+      samples:   20,
+    };
+
+    const gp = new GTAOPass(this.scene, this.camera, vp, vp);
+    gp.updateGtaoMaterial(aoParams);
+    gp.updatePdMaterial(pdParams);
+    gp.output = GTAOPass.OUTPUT.Default;
+    gp.blendIntensity = 0.72;
+
+    const outPass = new PatchTonemapPass();
+
+    composer.addPass(rp);
+    composer.addPass(gp);
+    composer.addPass(outPass);
+
+    this.patchComposer = composer;
+    this.patchGtaoPass = gp;
+    this.patchTonemapPass = outPass;
   }
 
   sync(
@@ -356,6 +470,9 @@ export class GrassBRDFPatchView {
     const msAmb = ambientMultiplierFromMS(grass);
     this.ambLight.intensity = 0.14 + msAmb;
     this.hemi.intensity = 0.22;
+    linearAlbedoToColor(grass.bladeAlbedoR, grass.bladeAlbedoG, grass.bladeAlbedoB, this.msBladeFill);
+    const msMix = THREE.MathUtils.clamp(msAmb * 1.75, 0, 0.38);
+    this.hemi.color.copy(this.lightTint).lerp(this.msBladeFill, msMix);
   }
 
   /**
@@ -386,14 +503,14 @@ export class GrassBRDFPatchView {
 
   /**
    * Renders the patch into the lower-left corner. Call after the main scene render.
-   * Re-applies the same toneMapping and toneMappingExposure as the stadium pass so
-   * MeshStandardMaterial uses the identical ACES + exposure path as field.frag.glsl
-   * (TONE_MAPPING branch).
+   * With GTAO, the final pass matches three.js OutputPass: same toneMapping,
+   * toneMappingExposure, and outputColorSpace as the WebGLRenderer (set on `renderer` before this call).
    */
   render(
     renderer: THREE.WebGLRenderer,
     toneMapping: THREE.ToneMapping,
     toneMappingExposure: number,
+    patchGtaoEnabled: boolean,
   ): void {
     const w = this.viewportPx;
     const h = this.viewportPx;
@@ -414,10 +531,133 @@ export class GrassBRDFPatchView {
     renderer.setScissor(left, bottom, w, h);
     renderer.clearDepth();
 
-    renderer.render(this.scene, this.camera);
+    if (patchGtaoEnabled) {
+      this.ensurePatchComposer(renderer, w);
+      if (this.patchComposer) {
+        this.patchComposer.renderToScreen = true;
+        this.patchComposer.render();
+      }
+    } else {
+      this.disposePatchComposer();
+      renderer.render(this.scene, this.camera);
+    }
 
     renderer.setViewport(prev.x, prev.y, prev.z, prev.w);
     renderer.setScissorTest(prevTest);
     renderer.autoClear = prevAutoClear;
+  }
+}
+
+/** Same ACES + sRGB path as three.js OutputPass; `discard` keeps the stadium visible where RT alpha is zero. */
+const PATCH_TONEMAP = {
+  uniforms: {
+    tDiffuse:            { value: null },
+    toneMappingExposure: { value: 1 },
+  },
+  vertexShader: /* glsl */ `
+    precision highp float;
+    uniform mat4 modelViewMatrix;
+    uniform mat4 projectionMatrix;
+    attribute vec3 position;
+    attribute vec2 uv;
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform sampler2D tDiffuse;
+    #include <tonemapping_pars_fragment>
+    #include <colorspace_pars_fragment>
+    varying vec2 vUv;
+    void main() {
+      vec4 tex = texture2D( tDiffuse, vUv );
+      if ( tex.a < 0.001 ) discard;
+      gl_FragColor = tex;
+      #ifdef LINEAR_TONE_MAPPING
+        gl_FragColor.rgb = LinearToneMapping( gl_FragColor.rgb );
+      #elif defined( REINHARD_TONE_MAPPING )
+        gl_FragColor.rgb = ReinhardToneMapping( gl_FragColor.rgb );
+      #elif defined( CINEON_TONE_MAPPING )
+        gl_FragColor.rgb = CineonToneMapping( gl_FragColor.rgb );
+      #elif defined( ACES_FILMIC_TONE_MAPPING )
+        gl_FragColor.rgb = ACESFilmicToneMapping( gl_FragColor.rgb );
+      #elif defined( AGX_TONE_MAPPING )
+        gl_FragColor.rgb = AgXToneMapping( gl_FragColor.rgb );
+      #elif defined( NEUTRAL_TONE_MAPPING )
+        gl_FragColor.rgb = NeutralToneMapping( gl_FragColor.rgb );
+      #endif
+      #ifdef SRGB_TRANSFER
+        gl_FragColor = sRGBTransferOETF( gl_FragColor );
+      #endif
+    }
+  `,
+};
+
+class PatchTonemapPass extends Pass {
+  private readonly uniforms: {
+    tDiffuse: { value: THREE.Texture | null };
+    toneMappingExposure: { value: number };
+  };
+  private readonly material: RawShaderMaterial;
+  private readonly fsQuad: FullScreenQuad;
+  private outCs: string | null = null;
+  private outTm: ToneMapping | null = null;
+
+  constructor() {
+    super();
+    this.uniforms = UniformsUtils.clone(PATCH_TONEMAP.uniforms) as PatchTonemapPass['uniforms'];
+    this.material = new RawShaderMaterial({
+      name:         'PatchTonemapPass',
+      uniforms:     this.uniforms as unknown as { [k: string]: IUniform },
+      vertexShader: PATCH_TONEMAP.vertexShader,
+      fragmentShader: PATCH_TONEMAP.fragmentShader,
+    });
+    this.fsQuad = new FullScreenQuad(this.material);
+  }
+
+  render(
+    renderer: WebGLRenderer,
+    writeBuffer: WebGLRenderTarget,
+    readBuffer: WebGLRenderTarget,
+  ): void {
+    this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.toneMappingExposure.value = renderer.toneMappingExposure;
+    if (this.outCs !== renderer.outputColorSpace || this.outTm !== renderer.toneMapping) {
+      this.outCs = renderer.outputColorSpace;
+      this.outTm = renderer.toneMapping;
+      this.material.defines = {};
+      if (ColorManagement.getTransfer(renderer.outputColorSpace) === SRGBTransfer) {
+        this.material.defines.SRGB_TRANSFER = '';
+      }
+      if (this.outTm === LinearToneMapping) this.material.defines.LINEAR_TONE_MAPPING = '';
+      else if (this.outTm === ReinhardToneMapping) this.material.defines.REINHARD_TONE_MAPPING = '';
+      else if (this.outTm === CineonToneMapping) this.material.defines.CINEON_TONE_MAPPING = '';
+      else if (this.outTm === ACESFilmicToneMapping) this.material.defines.ACES_FILMIC_TONE_MAPPING = '';
+      else if (this.outTm === AgXToneMapping) this.material.defines.AGX_TONE_MAPPING = '';
+      else if (this.outTm === NeutralToneMapping) this.material.defines.NEUTRAL_TONE_MAPPING = '';
+      this.material.needsUpdate = true;
+    }
+    if (this.renderToScreen) {
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) {
+        renderer.clear(
+          renderer.autoClearColor,
+          renderer.autoClearDepth,
+          renderer.autoClearStencil,
+        );
+      }
+      this.fsQuad.render(renderer);
+    }
+  }
+
+  override dispose(): void {
+    this.material.dispose();
+    this.fsQuad.dispose();
   }
 }

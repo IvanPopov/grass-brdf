@@ -11,7 +11,14 @@ import { createFieldAnnotations, createStandAnnotations, HeightAnnotation } from
 import { Stands } from './scene/Stands';
 import { buildGui } from './ui/Gui';
 import { IlluminanceDebug } from './debug/IlluminanceDebug';
-import { DEFAULT_GRASS_BRDF, DEFAULT_GRASS_DEBUG, GrassBRDFDebug, GrassBRDFParams } from './scene/GrassBRDFParams';
+import {
+  DEFAULT_GRASS_BRDF,
+  DEFAULT_GRASS_DEBUG,
+  DEFAULT_PATCH_DEBUG,
+  GrassBRDFDebug,
+  GrassBRDFParams,
+  GrassPatchDebug,
+} from './scene/GrassBRDFParams';
 import { GrassBRDFPatchView } from './debug/GrassBRDFPatchView';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
@@ -23,6 +30,7 @@ const grassParams: GrassBRDFParams = { ...DEFAULT_GRASS_BRDF };
 
 // Per-component debug toggles — mutable object shared with GUI.
 const grassDebug: GrassBRDFDebug = { ...DEFAULT_GRASS_DEBUG };
+const patchDebug: GrassPatchDebug = { ...DEFAULT_PATCH_DEBUG };
 
 const grassPatchView = new GrassBRDFPatchView();
 grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
@@ -96,7 +104,14 @@ function onGrassChange(): void {
   grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }
 
-const { gui, updateComputedDisplay } = buildGui(params, rebuild, grassParams, grassDebug, onGrassChange);
+const { gui, updateComputedDisplay } = buildGui(
+  params,
+  rebuild,
+  grassParams,
+  grassDebug,
+  patchDebug,
+  onGrassChange,
+);
 
 // Debug controls
 const debugFolder = gui.addFolder('Debug');
@@ -191,7 +206,7 @@ function animate(): void {
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 
-  grassPatchView.render(renderer, toneMapping, toneMappingExposure);
+  grassPatchView.render(renderer, toneMapping, toneMappingExposure, patchDebug.gtao);
 }
 
 animate();
