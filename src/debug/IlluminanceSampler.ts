@@ -340,3 +340,183 @@ export function sampleGrid(
     minAt, maxAt, cols, rows, xs, zs,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CIE 112 Glare Rating (GR) — outdoor sports lighting standard
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Result of a CIE 112 Glare Rating evaluation at a single observer position.
+ *
+ * CIE 112 / EN 12193 is the correct glare metric for outdoor sports lighting.
+ * (UGR per CIE 117 is designed for indoor horizontal viewing; the Guth position
+ * index saturates at high elevation angles typical of stadium rigs, making UGR
+ * unsuitable for overhead floodlighting.)
+ *
+ * GR scale interpretation:
+ *   GR < 10  : Imperceptible
+ *   10–20    : Perceptible but not annoying
+ *   20–30    : Annoying
+ *   30–40    : Disturbing
+ *   40–50    : Intolerable (limit for EN 12193 Class I / FIFA Class V)
+ *   > 50     : Beyond limit
+ *
+ * EN 12193 / FIFA Class V limit: GR ≤ 50.
+ *
+ * Formula (Holladay, 1926; formalised in CIE 112, 1994):
+ *
+ *   GR = 27 + 24 × log₁₀(L_vl / L_ve^0.9)
+ *
+ *   L_vl = Σ(10 × E_eye_i / θ_i²)    [cd/m²]  veiling luminance from all in-cone sources
+ *   L_ve = E_h_avg × ρ / π            [cd/m²]  adaptation luminance from field surface
+ *
+ *   E_eye_i  — illuminance at the observer's eye from source i, measured on a
+ *              plane perpendicular to the line from eye to source [lux]:
+ *                E_eye_i = I_i × bf_i / r_i²
+ *   θ_i      — angle [degrees] between observer's gaze direction and direction
+ *              to source i.  Small θ (source near line-of-sight) is worst-case.
+ *              Clamped to ≥ 1.5° to prevent singularity.
+ */
+export interface GrResult {
+  GR:    number;  // [0–100] Glare Rating, CIE 112 / EN 12193
+  L_vl:  number;  // [cd/m²] total veiling luminance from sources
+  L_ve:  number;  // [cd/m²] adaptation (background) luminance of field
+}
+
+/**
+ * Computes CIE 112 Glare Rating for a single observer position and gaze direction.
+ *
+ * @param lights      - active SpotLight array
+ * @param observerPos - observer eye position [m] (typically 1.5 m above pitch)
+ * @param viewDir     - unit vector: observer's horizontal gaze direction
+ * @param avgEh       - mean horizontal illuminance on field [lux] (from sampleGrid)
+ * @param fieldRefl   - diffuse reflectance of playing surface ρ [0–1] (grass: 0.25)
+ * @param iesExp      - IES beam concentration exponent
+ */
+export function sampleGR(
+  lights:      readonly THREE.SpotLight[],
+  observerPos: THREE.Vector3,
+  viewDir:     THREE.Vector3,
+  avgEh:       number,
+  fieldRefl:   number,
+  iesExp = 0,
+): GrResult {
+  // Background luminance: Lambertian field with diffuse reflectance ρ.
+  const L_ve = avgEh * fieldRefl / Math.PI;
+
+  let L_vl = 0;
+
+  for (const light of lights) {
+    const dx = light.position.x - observerPos.x;
+    const dy = light.position.y - observerPos.y;
+    const dz = light.position.z - observerPos.z;
+    const r2 = dx * dx + dy * dy + dz * dz;
+    const r  = Math.sqrt(r2);
+    if (r < 0.001) continue;
+
+    // Direction from observer to source (normalised).
+    const nx = dx / r;
+    const ny = dy / r;
+    const nz = dz / r;
+
+    // Only sources in the upper hemisphere (above pitch level) contribute.
+    if (ny <= 0) continue;
+
+    // Beam factor: direction from light toward observer = (-nx, -ny, -nz).
+    const ax  = light.target.position.x - light.position.x;
+    const ay  = light.target.position.y - light.position.y;
+    const az  = light.target.position.z - light.position.z;
+    const al  = Math.sqrt(ax * ax + ay * ay + az * az);
+    const cosToPoint = (-nx) * (ax / al) + (-ny) * (ay / al) + (-nz) * (az / al);
+    const cosOuter   = Math.cos(light.angle);
+    const cosInner   = Math.cos(light.angle * (1 - light.penumbra));
+
+    const bf = beamFactor(cosToPoint, cosOuter, cosInner, iesExp);
+    if (bf === 0) continue;
+
+    // Illuminance at the eye on a plane perpendicular to direction to source.
+    const E_eye = light.intensity * bf / r2;
+
+    // Angle between gaze direction and direction to source [degrees].
+    const cosTheta = viewDir.x * nx + viewDir.y * ny + viewDir.z * nz;
+    const thetaDeg = THREE.MathUtils.radToDeg(Math.acos(Math.max(-1, Math.min(1, cosTheta))));
+
+    // Holladay veiling luminance contribution. θ clamped to ≥ 1.5° to avoid singularity.
+    const theta = Math.max(thetaDeg, 1.5);
+    L_vl += 10 * E_eye / (theta * theta);
+  }
+
+  let GR = 0;
+  if (L_vl > 0 && L_ve > 0) {
+    GR = 27 + 24 * Math.log10(L_vl / Math.pow(L_ve, 0.9));
+  }
+
+  return { GR: Math.max(0, GR), L_vl, L_ve };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Source luminance (nominal aperture model)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Apparent source luminance L_s [cd/m²] for a single SpotLight as seen from
+ * an observer position, using a nominal emitter aperture area.
+ *
+ * Model derivation:
+ *   The fixture face normal is approximated as -axis (the beam points from fixture
+ *   toward the target; the emitter face points the opposite way).
+ *   cos(θ_view) = dot(direction_from_fixture_to_observer, -axis)
+ *   A_proj      = fixtureArea × cos(θ_view)   [m²]  projected aperture
+ *   L_s         = I(θ_obs) / A_proj           [cd/m²]
+ *
+ * Reference fixture: Philips ArenaVision LED gen3 (MVF403)
+ *   fixtureArea ≈ 0.166 m²  (540 × 308 mm housing aperture)
+ *   Typical on-axis L_s ≈ 2 × 10⁶ – 5 × 10⁶ cd/m²
+ *
+ * @param fixtureArea - nominal luminous aperture of one physical fixture [m²]
+ * @returns L_s [cd/m²], or 0 if the source is outside the beam or behind the observer.
+ */
+export function sourceLuminance(
+  light:        THREE.SpotLight,
+  observerPos:  THREE.Vector3,
+  fixtureArea:  number,
+  iesExp = 0,
+): number {
+  const dx = observerPos.x - light.position.x;
+  const dy = observerPos.y - light.position.y;
+  const dz = observerPos.z - light.position.z;
+  const r2 = dx * dx + dy * dy + dz * dz;
+  const r  = Math.sqrt(r2);
+  if (r < 0.001) return 0;
+
+  // Direction from light to observer (normalised).
+  const nx = dx / r;
+  const ny = dy / r;
+  const nz = dz / r;
+
+  // Beam axis (normalised).
+  const ax  = light.target.position.x - light.position.x;
+  const ay  = light.target.position.y - light.position.y;
+  const az  = light.target.position.z - light.position.z;
+  const al  = Math.sqrt(ax * ax + ay * ay + az * az);
+  const axN = ax / al;
+  const ayN = ay / al;
+  const azN = az / al;
+
+  const cosToPoint = nx * axN + ny * ayN + nz * azN;
+  const cosOuter   = Math.cos(light.angle);
+  const cosInner   = Math.cos(light.angle * (1 - light.penumbra));
+
+  const bf = beamFactor(cosToPoint, cosOuter, cosInner, iesExp);
+  if (bf === 0) return 0;
+
+  // Apparent intensity toward observer.
+  const I_obs = light.intensity * bf;
+
+  // cos(θ_view): angle between fixture face normal (-axis) and direction to observer.
+  const cosView = Math.max(0, nx * (-axN) + ny * (-ayN) + nz * (-azN));
+  const A_proj  = fixtureArea * cosView;
+  if (A_proj < 1e-8) return 0;
+
+  return I_obs / A_proj;
+}

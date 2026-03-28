@@ -97,6 +97,28 @@ export const DEFAULT_PARAMS = {
   //   The symmetric cross-fire accumulation at z=0 drops ~3×.
   iesExponent: 3,             // beam concentration exponent         [0–6]
 
+  // ── Fixture photometric geometry (for GR / source luminance) ─────────
+  // Nominal luminous aperture area of a single physical fixture [m²].
+  // Used to convert peak intensity [cd] → source luminance [cd/m²] for
+  // CIE 112 Glare Rating and for UGR / disability glare assessments.
+  //
+  // Reference: Philips ArenaVision LED gen3 (MVF403)
+  //   Housing aperture: 540 mm × 308 mm ≈ 0.166 m²
+  //   This fixture is installed at Allianz Arena, Emirates, Amsterdam ArenA,
+  //   and many other UEFA Cat. 4 venues.
+  //   Peak luminance on-axis: I_peak / A ≈ 700 000 cd / 0.166 m² ≈ 4.2 × 10⁶ cd/m²
+  //   (realistic; typical LED stadium fixture: 1 × 10⁶ – 8 × 10⁶ cd/m²)
+  fixtureLuminousArea: 0.166,  // [m²]  Philips ArenaVision LED gen3 aperture
+
+  // Diffuse reflectance of the playing surface [0–1].
+  // Used to derive the background (adaptation) luminance L_ve for CIE 112 GR:
+  //   L_ve = E_h_avg × ρ / π   [cd/m²]
+  // Natural grass (maintained, wet):   ρ ≈ 0.20
+  // Natural grass (dry, cut short):    ρ ≈ 0.25
+  // Artificial turf (FIFA Quality Pro): ρ ≈ 0.28
+  // We use 0.25 — typical grass under broadcast conditions.
+  fieldReflectance: 0.25,      // [0–1]  natural grass diffuse reflectance
+
   // ── Colorimetric / physical ───────────────────────────────────────────
   colorTempK: 5600,           // CCT correlated color temperature [K]   (FIFA: 5600 K = daylight)
 

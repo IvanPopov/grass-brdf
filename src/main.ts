@@ -90,8 +90,10 @@ debugFolder.add(debug, 'showAimTargets').name('Aim targets (orange)')
   .onChange(() => debug.rebuild(lightRig.lights));
 debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (discs)')
   .onChange(() => debug.rebuild(lightRig.lights));
-debugFolder.add(debug, 'showGlareProbes').name('Glare probes (player/GK)')
+const grProbesCtrl = debugFolder.add(debug, 'showGrProbes').name('GR probes')
   .onChange(() => debug.rebuild(lightRig.lights));
+(grProbesCtrl.domElement as HTMLElement).title =
+  'CIE 112 Glare Rating (EN 12193). green <30 / yellow 30-40 / orange 40-50 / red >50 (FIFA limit GR=50). Bar height = GR/5 m.';
 // In lighting-only mode the grass colour is replaced by 18 % neutral grey.
 // This reveals the pure illumination distribution (E_h contour) without the
 // green surface tinting the perception of uniformity.
@@ -133,7 +135,9 @@ function rebuild(): void {
   lightRigVisual.build(lightRig.lights, params);
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
   fieldMat.update(lightRig.lights, params.iesExponent);
-  debug.iesExponent = params.iesExponent;
+  debug.iesExponent        = params.iesExponent;
+  debug.fixtureLuminousArea = params.fixtureLuminousArea;
+  debug.fieldReflectance    = params.fieldReflectance;
   debug.rebuild(lightRig.lights);
   debug.logReport(lightRig.lights);
 

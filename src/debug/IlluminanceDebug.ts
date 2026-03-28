@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { sampleGrid, sampleEv, sampleGlare } from './IlluminanceSampler';
+import { sampleGrid, sampleGR, sourceLuminance, GridStats } from './IlluminanceSampler';
 import { FIELD_W, FIELD_H } from '../config';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,8 +166,7 @@ function buildHeatmap(
  * The primary diagnostic value of this report is UNIFORMITY (U1, U2), not the
  * absolute lux numbers.
  */
-function logIlluminanceGrid(lights: readonly THREE.SpotLight[], iesExp: number): void {
-  const s = sampleGrid(lights, 21, 21, iesExp);
+function logIlluminanceGrid(s: GridStats): void {
 
   console.group('=== E_h Illuminance Grid 21×21 [lux] (initial, UC=1, MF=1) ===');
 
@@ -269,36 +268,10 @@ function logSpacingAndAiming(lights: readonly THREE.SpotLight[]): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Glare probe visualisation
+// Observer probes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Probe positions and types.
- *
- * Player probes (3 × 3 grid) sample the field at mid-body height (1.5 m).
- * Goalkeeper probes sit exactly at each goal mouth, facing the opposite end.
- *
- * Physical reference — FIFA mounting height requirement:
- *   Minimum elevation angle from any field position to any fixture = 25° (approx).
- *   At h = 50 m, the nearest catwalk light (horizontal dist ≈ 27 m from touchline,
- *   ≈ 15 m from the nearest player near the touchline) is at:
- *     arctan(48.5 / 15) ≈ 72° — no issue.
- *   The farthest light (opposite long side, dist ≈ 121 m) from a goalkeeper at
- *   the goal mouth is at:
- *     arctan(48.5 / 125) ≈ 21° — in the glare zone.
- *   This is the cross-fire trade-off: opposite-side lights must be high enough
- *   that their elevation at the goalkeeper > 25° (FIFA comfort guideline).
- *   At 50 m, that requires horizontal distance < 48.5 / tan(25°) ≈ 104 m.
- *   Our oval semi-axis = 80 m → the farthest opposite light is at
- *     dist = sqrt(80+52.5)² + 55² ≈ 146 m → elevation ≈ 18° < 25°.
- *   This means our current rig may produce glare for goalkeepers — flagged in red.
- *
- * Elevation thresholds (colour coding):
- *   minElevDeg > 35°: green  — no practical glare risk.
- *   25° < minElevDeg ≤ 35°: yellow — CAUTION, at or near FIFA 25° minimum.
- *   minElevDeg ≤ 25°: red    — GLARE, below FIFA minimum elevation requirement.
- */
-
+/** 3×3 player grid at 1.5 m eye height + 2 GK probes at goal mouths. */
 interface ProbeEntry {
   pos:     THREE.Vector3;
   isGK:    boolean;   // goalkeeper position (has gaze direction)
@@ -333,135 +306,256 @@ function buildProbeList(): ProbeEntry[] {
   return probes;
 }
 
-// FIFA mounting requirement: every fixture must appear at elevation ≥ 25° from
-// any player's eye level.  Lights below this threshold cause disability glare.
-//
-// Thresholds:
-//   < 25°:   GLARE   — below FIFA minimum; disability glare risk.
-//   25°–35°: CAUTION — at or near FIFA limit; discomfort glare possible.
-//   > 35°:   OK      — well above limit; negligible glare concern.
-//
-// Typical rig geometry note:
-//   At rigHeight = 50 m and ovalHalfLength = 80 m the farthest opposite-side
-//   light seen from the goalkeeper (horiz. dist ≈ 132 m) appears at elevation
-//   arctan(48.5 / 132) ≈ 20° — below 25°.  This is a geometry constraint:
-//   the oval must be kept smaller OR the rig raised to meet FIFA comfort rules.
-const GLARE_ELEV_RED    = 25; // [deg]  GLARE   — below FIFA minimum
-const GLARE_ELEV_YELLOW = 35; // [deg]  CAUTION — within 10° of FIFA limit
+// ─────────────────────────────────────────────────────────────────────────────
+// GR probe visualisation (CIE 112)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function elevToColor(minElevDeg: number): THREE.Color {
-  if (minElevDeg <= GLARE_ELEV_RED)    return new THREE.Color(1.0, 0.15, 0.05);
-  if (minElevDeg <= GLARE_ELEV_YELLOW) return new THREE.Color(1.0, 0.85, 0.00);
-  return new THREE.Color(0.05, 0.90, 0.20);
+/**
+ * Maps a CIE 112 GR value to a colour following EN 12193 risk zones:
+ *   GR < 30  : green   — safe
+ *   30–40    : yellow  — disturbing
+ *   40–50    : orange  — intolerable / limit zone
+ *   > 50     : red     — exceeds EN 12193 / FIFA Class V limit
+ */
+function grToColor(GR: number): THREE.Color {
+  if (GR < 30) return new THREE.Color(0.05, 0.90, 0.20);
+  if (GR < 40) return new THREE.Color(1.00, 0.85, 0.00);
+  if (GR < 50) return new THREE.Color(1.00, 0.40, 0.00);
+  return new THREE.Color(1.00, 0.15, 0.05);
+}
+
+/** Canvas sprite showing "GR: N" above the probe sphere. */
+function makeGrLabel(GR: number, pos: THREE.Vector3): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width  = 200;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle    = 'rgba(0,0,0,0.55)';
+  ctx.roundRect(2, 2, 196, 60, 6);
+  ctx.fill();
+  ctx.fillStyle    = GR >= 50 ? '#ff4422' : GR >= 40 ? '#ff8800' : GR >= 30 ? '#ffdd00' : '#22ee55';
+  ctx.font         = 'bold 36px monospace';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`GR ${GR.toFixed(0)}`, 100, 32);
+
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, toneMapped: false }),
+  );
+  sprite.position.copy(pos);
+  sprite.scale.set(6, 2, 1);
+  sprite.renderOrder = 11;
+  return sprite;
 }
 
 /**
- * Builds a sphere at each probe position, coloured by the minimum elevation
- * of any in-cone SpotLight as seen from that position.
- * Goalkeeper probes additionally show a faint gaze-direction arrow.
+ * Gaze directions sampled for player probes (4 cardinal horizontals).
+ * The worst-case GR over all directions is taken — mirrors EN 12193 protocol.
  */
-function buildGlareProbes(
-  lights: readonly THREE.SpotLight[],
-  group:  THREE.Group,
-  iesExp: number,
+const CARDINAL_DIRS: THREE.Vector3[] = [
+  new THREE.Vector3( 1, 0,  0),
+  new THREE.Vector3(-1, 0,  0),
+  new THREE.Vector3( 0, 0,  1),
+  new THREE.Vector3( 0, 0, -1),
+];
+
+/**
+ * Builds GR probe spheres coloured by CIE 112 Glare Rating.
+ *
+ * Each sphere:
+ *   - Colour follows EN 12193 risk zones (green / yellow / orange / red).
+ *   - A vertical bar (height = GR / 5 m, capped at 12 m) encodes GR magnitude.
+ *   - A canvas label shows the numeric GR value.
+ *
+ * Player probes: worst GR over 4 cardinal horizontal gaze directions.
+ * Goalkeeper probes: GR in the player's gaze direction (toward field centre).
+ *
+ * @param avgEh     - mean E_h on field [lux] — needed for L_ve background term
+ * @param fieldRefl - grass reflectance ρ
+ */
+function buildGrProbes(
+  lights:    readonly THREE.SpotLight[],
+  group:     THREE.Group,
+  iesExp:    number,
+  avgEh:     number,
+  fieldRefl: number,
 ): void {
   const probes   = buildProbeList();
-  const sphGeo   = new THREE.SphereGeometry(1.0, 10, 10);
-  const gkSphGeo = new THREE.SphereGeometry(1.4, 10, 10);
-
-  const arrowMat = new THREE.LineBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.35, toneMapped: false, depthTest: false,
-  });
-
-  // Visual display height — raised above field to avoid depth-precision z-fighting
-  // at large camera distances. Measurement (sampleGlare/sampleEv) still uses the
-  // physically correct eye height stored in probe.pos (1.5 m).
-  const DISPLAY_Y = 3.0; // [m] visual sphere centre height
+  const sphGeo   = new THREE.SphereGeometry(1.1, 12, 12);
+  const gkSphGeo = new THREE.SphereGeometry(1.5, 12, 12);
+  const DISPLAY_Y = 3.5; // [m] base of sphere above pitch
 
   for (const probe of probes) {
-    // elevLimitDeg = 25 matches FIFA minimum; lowAngleEv accumulates contributions
-    // only from lights appearing below 25° elevation.
-    const result = sampleGlare(lights, probe.pos, 25, iesExp);
-    const color  = elevToColor(result.minElevDeg);
-    const mat    = new THREE.MeshBasicMaterial({ color, toneMapped: false, depthTest: false });
-    const geo    = probe.isGK ? gkSphGeo : sphGeo;
+    // Determine worst-case GR and the gaze direction that produced it.
+    let worstGR  = 0;
+    let worstDir = CARDINAL_DIRS[0];
+
+    const dirs = probe.isGK && probe.gazDir ? [probe.gazDir] : CARDINAL_DIRS;
+    for (const dir of dirs) {
+      const res = sampleGR(lights, probe.pos, dir, avgEh, fieldRefl, iesExp);
+      if (res.GR > worstGR) { worstGR = res.GR; worstDir = dir; }
+    }
+
+    const color = grToColor(worstGR);
+    const mat   = new THREE.MeshBasicMaterial({ color, toneMapped: false, depthTest: false });
+    const geo   = probe.isGK ? gkSphGeo : sphGeo;
     const sphere = new THREE.Mesh(geo, mat);
     sphere.position.set(probe.pos.x, DISPLAY_Y, probe.pos.z);
     sphere.renderOrder = 10;
     group.add(sphere);
 
-    // Gaze arrow for goalkeeper probes
-    if (probe.isGK && probe.gazDir) {
-      const origin = new THREE.Vector3(probe.pos.x, DISPLAY_Y, probe.pos.z);
-      const end    = origin.clone().addScaledVector(probe.gazDir, 8);
-      const linGeo = new THREE.BufferGeometry().setFromPoints([origin, end]);
-      const line   = new THREE.Line(linGeo, arrowMat);
-      line.renderOrder = 10;
-      group.add(line);
+    // Vertical bar: height = GR / 5 (GR=50 → 10 m), capped at 12 m.
+    const barH   = Math.min(worstGR / 5, 12);
+    const barBot = new THREE.Vector3(probe.pos.x, DISPLAY_Y, probe.pos.z);
+    const barTop = new THREE.Vector3(probe.pos.x, DISPLAY_Y + barH, probe.pos.z);
+    const barGeo = new THREE.BufferGeometry().setFromPoints([barBot, barTop]);
+    const barMat = new THREE.LineBasicMaterial({ color, toneMapped: false, depthTest: false });
+    const bar    = new THREE.Line(barGeo, barMat);
+    bar.renderOrder = 10;
+    group.add(bar);
 
-      // E_v in gaze direction — vertical bar (height = Ev/300, cap 10 m)
-      const Ev     = sampleEv(lights, probe.pos, probe.gazDir, iesExp);
-      const barH   = Math.min(Ev / 300, 10);
-      const barBot = origin.clone();
-      const barTop = origin.clone().setY(DISPLAY_Y + barH);
-      const barGeo = new THREE.BufferGeometry().setFromPoints([barBot, barTop]);
-      const barMat = new THREE.LineBasicMaterial({
-        color: 0x00ccff, toneMapped: false, depthTest: false,
+    // Gaze arrow for GK (shows which direction was evaluated).
+    if (probe.isGK) {
+      const origin  = new THREE.Vector3(probe.pos.x, DISPLAY_Y, probe.pos.z);
+      const arrowEnd = origin.clone().addScaledVector(worstDir, 8);
+      const linGeo  = new THREE.BufferGeometry().setFromPoints([origin, arrowEnd]);
+      const linMat  = new THREE.LineBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0.4, toneMapped: false, depthTest: false,
       });
-      const bar = new THREE.Line(barGeo, barMat);
-      bar.renderOrder = 10;
-      group.add(bar);
+      group.add(new THREE.Line(linGeo, linMat));
     }
+
+    // Canvas label above the bar.
+    group.add(makeGrLabel(worstGR, new THREE.Vector3(probe.pos.x + 2, DISPLAY_Y + barH + 1.5, probe.pos.z)));
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CIE 112 Glare Rating report
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Console report: per-probe glare assessment.
+ * Interprets a CIE 112 GR value according to EN 12193 / FIFA Class V limits.
  *
- * Columns:
- *   pos      — (x, z) [m]
- *   type     — PLAYER or GK
- *   minElev  — elevation [deg] of the lowest in-cone light
- *   risk     — OK / CAUTION / GLARE
- *   Ev_gaze  — E_v [lux] in gaze direction (GK only)
+ * EN 12193 Table 1 (outdoor football):
+ *   Class I (top-level competition, broadcast): GR ≤ 50
+ *   Class II (competition):                     GR ≤ 50
+ *   Class III (training):                       GR ≤ 55
+ * FIFA Class V (UHD broadcast): GR ≤ 50
  */
-function logGlareReport(lights: readonly THREE.SpotLight[], iesExp: number): void {
-  console.group('=== Glare Probe Report (player head height 1.5 m) ===');
+function grLabel(GR: number): string {
+  if (GR < 10) return 'Imperceptible';
+  if (GR < 20) return 'Perceptible / not annoying';
+  if (GR < 30) return 'Annoying';
+  if (GR < 40) return 'Disturbing';
+  if (GR < 50) return 'Intolerable (limit zone)';
+  return 'EXCEEDS EN 12193 / FIFA Class V limit (GR > 50)';
+}
+
+/**
+ * Logs CIE 112 Glare Rating for standard probe positions.
+ *
+ * For each observer (player mid-field, GK at each goal) the GR is evaluated
+ * for 4 cardinal horizontal gaze directions. The worst-case (maximum) GR per
+ * observer is reported — this mirrors the EN 12193 measurement protocol where
+ * GR must be checked in the "most unfavourable" viewing direction.
+ *
+ * Source luminance statistics (Philips ArenaVision LED gen3 aperture model):
+ *   Peak L_s [cd/m²] for the brightest fixture as seen from each position.
+ *   Typical real range: 1 × 10⁶ – 8 × 10⁶ cd/m²  (varies with off-axis angle).
+ *
+ * @param avgEh         - mean E_h on field [lux], from sampleGrid
+ * @param fieldRefl     - field surface reflectance ρ (grass: 0.25)
+ * @param fixtureArea   - nominal single-fixture aperture area [m²] (MVF403: 0.166 m²)
+ * @param iesExp        - IES beam exponent
+ */
+function logGrReport(
+  lights:       readonly THREE.SpotLight[],
+  avgEh:        number,
+  fieldRefl:    number,
+  fixtureArea:  number,
+  iesExp:       number,
+): void {
+  console.group('=== CIE 112 Glare Rating (GR) — EN 12193 / FIFA Class V limit ≤ 50 ===');
   console.log(
-    'type  '.padEnd(7) +
-    'x'.padStart(6) + ' ' +
-    'z'.padStart(6) + ' ' +
-    'minElev[deg]'.padStart(13) + ' ' +
-    'risk'.padStart(8) + ' ' +
-    'Ev_gaze[lux]'.padStart(13),
+    '  Reference fixture: Philips ArenaVision LED gen3 (MVF403), aperture 540×308 mm = 0.166 m²',
   );
 
-  const probes = buildProbeList();
+  // Gaze directions: 4 cardinal horizontal azimuths.
+  const gazeDirs: [string, THREE.Vector3][] = [
+    ['E (+X)', new THREE.Vector3(1, 0, 0)],
+    ['W (-X)', new THREE.Vector3(-1, 0, 0)],
+    ['N (+Z)', new THREE.Vector3(0, 0, 1)],
+    ['S (-Z)', new THREE.Vector3(0, 0, -1)],
+  ];
 
-  for (const probe of probes) {
-    const result   = sampleGlare(lights, probe.pos, 25, iesExp);
-    const minElev  = result.minElevDeg;
-    const risk     = minElev <= GLARE_ELEV_RED    ? 'GLARE   (<25 deg FIFA)'
-                   : minElev <= GLARE_ELEV_YELLOW ? 'CAUTION (25-35 deg)'
-                   : 'OK      (>35 deg)';
+  // Observer positions: mid-field player + goalkeepers.
+  const observers: [string, THREE.Vector3][] = [
+    ['Player (centre)',   new THREE.Vector3(0,           1.5, 0)],
+    ['GK (east goal)',    new THREE.Vector3(FIELD_W / 2, 1.5, 0)],
+    ['GK (west goal)',    new THREE.Vector3(-FIELD_W / 2, 1.5, 0)],
+  ];
 
-    let evGaze = '-';
-    if (probe.isGK && probe.gazDir) {
-      const Ev = sampleEv(lights, probe.pos, probe.gazDir, iesExp);
-      evGaze   = Math.round(Ev).toString();
+  console.log('');
+  console.log(
+    'observer'.padEnd(20) +
+    'gaze'.padEnd(8) +
+    'GR'.padStart(5) + ' ' +
+    'L_vl[cd/m2]'.padStart(13) + ' ' +
+    'L_ve[cd/m2]'.padStart(13) + ' ' +
+    'status',
+  );
+
+  for (const [obsName, obsPos] of observers) {
+    let worstGR   = 0;
+    let worstDir  = '';
+    let worstLvl  = 0;
+    let worstLve  = 0;
+
+    for (const [dirName, dir] of gazeDirs) {
+      const res = sampleGR(lights, obsPos, dir, avgEh, fieldRefl, iesExp);
+      if (res.GR > worstGR) {
+        worstGR  = res.GR;
+        worstDir = dirName;
+        worstLvl = res.L_vl;
+        worstLve = res.L_ve;
+      }
     }
 
-    const type = probe.isGK ? 'GK' : 'player';
     console.log(
-      type.padEnd(7) +
-      probe.pos.x.toFixed(0).padStart(6) + ' ' +
-      probe.pos.z.toFixed(0).padStart(6) + ' ' +
-      minElev.toFixed(1).padStart(13) + ' ' +
-      risk.padStart(8) + ' ' +
-      evGaze.padStart(13),
+      obsName.padEnd(20) +
+      worstDir.padEnd(8) +
+      worstGR.toFixed(1).padStart(5) + ' ' +
+      worstLvl.toExponential(2).padStart(13) + ' ' +
+      worstLve.toFixed(2).padStart(13) + ' ' +
+      grLabel(worstGR),
     );
   }
 
+  // Source luminance statistics — sample worst-case observer (centre player, looking E).
+  const centrePos = new THREE.Vector3(0, 1.5, 0);
+  let peakLs = 0;
+  let sumLs  = 0;
+  let nLs    = 0;
+
+  for (const light of lights) {
+    const Ls = sourceLuminance(light, centrePos, fixtureArea, iesExp);
+    if (Ls > 0) {
+      peakLs = Math.max(peakLs, Ls);
+      sumLs += Ls;
+      nLs++;
+    }
+  }
+
+  console.log('');
+  console.log('  Source luminance (centre-field observer, Philips MVF403 aperture model):');
+  console.log(`    Peak L_s  = ${(peakLs / 1e6).toFixed(2)} × 10⁶ cd/m²  (typical LED floodlight: 1–8 × 10⁶ cd/m²)`);
+  console.log(`    Mean L_s  = ${(nLs > 0 ? sumLs / nLs / 1e6 : 0).toFixed(2)} × 10⁶ cd/m²  (in-cone fixtures only)`);
+  console.log(`    L_ve      = ${(avgEh * fieldRefl / Math.PI).toFixed(2)} cd/m²  (field background, ρ = ${fieldRefl})`);
+  console.log('');
+  console.log('  Note: GR is evaluated for the worst-case horizontal gaze direction per EN 12193.');
+  console.log('  FIFA Class V requirement: GR ≤ 50 at any playing position.');
   console.groupEnd();
 }
 
@@ -481,36 +575,53 @@ function disposeGroup(g: THREE.Group): void {
 }
 
 export class IlluminanceDebug {
-  private aimGroup   = new THREE.Group();
-  private heatGroup  = new THREE.Group();
-  private glareGroup = new THREE.Group();
+  private aimGroup  = new THREE.Group();
+  private heatGroup = new THREE.Group();
+  private grGroup   = new THREE.Group();
 
-  showAimTargets  = false;
-  showHeatmap     = false;
-  showGlareProbes = false;
+  showAimTargets = false;
+  showHeatmap    = false;
+  /** CIE 112 GR probe visualisation — spheres coloured by Glare Rating. */
+  showGrProbes   = false;
   /** Beam concentration exponent — must be kept in sync with params.iesExponent. */
   iesExponent     = 3;
+  /** Philips ArenaVision LED gen3 (MVF403) aperture: 540×308 mm = 0.166 m². */
+  fixtureLuminousArea = 0.166;
+  /** Diffuse reflectance of playing surface ρ (grass: 0.25). */
+  fieldReflectance    = 0.25;
 
   init(scene: THREE.Scene): void {
     scene.add(this.aimGroup);
     scene.add(this.heatGroup);
-    scene.add(this.glareGroup);
+    scene.add(this.grGroup);
   }
 
   rebuild(lights: readonly THREE.SpotLight[]): void {
     disposeGroup(this.aimGroup);
     disposeGroup(this.heatGroup);
-    disposeGroup(this.glareGroup);
+    disposeGroup(this.grGroup);
 
-    if (this.showAimTargets)  buildAimTargets(lights, this.aimGroup);
-    if (this.showHeatmap)     buildHeatmap(lights, this.heatGroup, this.iesExponent);
-    if (this.showGlareProbes) buildGlareProbes(lights, this.glareGroup, this.iesExponent);
+    if (this.showAimTargets) buildAimTargets(lights, this.aimGroup);
+    if (this.showHeatmap)    buildHeatmap(lights, this.heatGroup, this.iesExponent);
+
+    if (this.showGrProbes) {
+      // avgEh is needed for L_ve background term; reuse a coarse 11×11 grid.
+      const { avg } = sampleGrid(lights, 11, 11, this.iesExponent);
+      buildGrProbes(lights, this.grGroup, this.iesExponent, avg, this.fieldReflectance);
+    }
   }
 
-  /** Full console report: placement analysis + illuminance grid + glare. */
+  /** Full console report: placement analysis + illuminance grid + glare + GR. */
   logReport(lights: readonly THREE.SpotLight[]): void {
     logSpacingAndAiming(lights);
-    logIlluminanceGrid(lights, this.iesExponent);
-    logGlareReport(lights, this.iesExponent);
+    const stats = sampleGrid(lights, 21, 21, this.iesExponent);
+    logIlluminanceGrid(stats);
+    logGrReport(
+      lights,
+      stats.avg,
+      this.fieldReflectance,
+      this.fixtureLuminousArea,
+      this.iesExponent,
+    );
   }
 }
