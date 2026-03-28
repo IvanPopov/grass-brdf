@@ -7,7 +7,7 @@ import { LightRig, computeGroupPhysics } from './lighting/LightRig';
 import { LightRigVisual } from './lighting/LightRigVisual';
 import { createField } from './scene/Field';
 import { createGrid } from './scene/Grid';
-import { createFieldAnnotations, HeightAnnotation } from './scene/Annotations';
+import { createFieldAnnotations, createStandAnnotations, HeightAnnotation } from './scene/Annotations';
 import { Stands } from './scene/Stands';
 import { buildGui } from './ui/Gui';
 import { IlluminanceDebug } from './debug/IlluminanceDebug';
@@ -60,6 +60,7 @@ camera.position.set(0, 120, 180);
 createGrid(scene);
 const { fieldMat } = createField(scene);
 createFieldAnnotations(scene);
+createStandAnnotations(scene);
 
 const stands = new Stands();
 stands.build(fieldMat);

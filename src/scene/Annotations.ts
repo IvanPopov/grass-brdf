@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { FIELD_W, FIELD_H } from '../config';
+import {
+  SAFETY_GAP, FIRST_ROW_H, ROW_RISE, NUM_ROWS, STAND_W,
+} from './Stands';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared constants
@@ -159,4 +162,94 @@ export class HeightAnnotation {
       [14, 3.5],
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stand dimension annotations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Creates three blue dimension arrows describing the north stand geometry:
+ *
+ *   1. Safety gap (5 m): horizontal Z-arrow at field level, between the
+ *      north touchline and the first row front barrier.
+ *
+ *   2. Stand height (~12 m): vertical Y-arrow at the stand front edge,
+ *      from pitch level (Y=0) to the top row floor.
+ *      Reference: Allianz Arena lower tier ~12 m, Emirates ~14 m.
+ *
+ *   3. Stand width (115 m): horizontal X-arrow above the top row,
+ *      spanning the full structural width of the stand.
+ *
+ * All annotations are placed on the east side (positive X) at
+ * X = STAND_W/2 + SIDE_OFFSET to keep them clear of other geometry.
+ *
+ * Verified against UEFA Category 4 / FIFA Class V design guidelines:
+ *   Safety gap: FIFA min 3 m, elite stadia 5-8 m.  Our value: 5 m ✓
+ *   Stand height: lower tier 10-16 m.                Our value: 11.9 m ✓
+ *   Stand width: follows pitch length + overhang.     Our value: 115 m ✓
+ */
+export function createStandAnnotations(scene: THREE.Scene): void {
+  const g = new THREE.Group();
+
+  // Derived stand geometry.
+  const standFrontZ  = FIELD_H / 2 + SAFETY_GAP;                // Z of first row front edge
+  const standTopY    = FIRST_ROW_H + NUM_ROWS * ROW_RISE;        // Y of last row top surface
+  const standMidY    = standTopY / 2;
+  const eastX        = STAND_W / 2 + SIDE_OFFSET + 2;            // X of annotation lines
+  const tickLen      = 3;                                         // [m] tick mark half-length
+
+  // ── 1. Safety gap (Z direction, at field level) ──────────────────────────
+  const gapY  = DIM_Y;
+  const gapZ0 = FIELD_H / 2;     // north touchline
+  const gapZ1 = standFrontZ;     // stand front
+
+  // Witness lines from touchline and stand front up to the annotation X.
+  addLine(g, new THREE.Vector3(STAND_W / 2, gapY, gapZ0), new THREE.Vector3(eastX + 1, gapY, gapZ0));
+  addLine(g, new THREE.Vector3(STAND_W / 2, gapY, gapZ1), new THREE.Vector3(eastX + 1, gapY, gapZ1));
+  // Dimension line along Z.
+  addLine(g, new THREE.Vector3(eastX, gapY, gapZ0), new THREE.Vector3(eastX, gapY, gapZ1));
+  // Inward arrows.
+  addArrow(g, new THREE.Vector3(eastX, gapY, gapZ0), new THREE.Vector3(0, 0,  1));
+  addArrow(g, new THREE.Vector3(eastX, gapY, gapZ1), new THREE.Vector3(0, 0, -1));
+  // Label centred between the arrows.
+  addLabel(g, `${SAFETY_GAP} m`, new THREE.Vector3(eastX + 6, gapY, (gapZ0 + gapZ1) / 2), [10, 2.5]);
+
+  // ── 2. Stand height (Y direction, at stand front edge) ───────────────────
+  const htZ = standFrontZ;
+
+  // Witness ticks at Y=0 (pitch) and Y=standTopY (top row) along X.
+  addLine(g, new THREE.Vector3(eastX - tickLen, 0,         htZ), new THREE.Vector3(eastX + tickLen, 0,         htZ));
+  addLine(g, new THREE.Vector3(eastX - tickLen, standTopY, htZ), new THREE.Vector3(eastX + tickLen, standTopY, htZ));
+  // Dimension line along Y.
+  addLine(g, new THREE.Vector3(eastX, 0, htZ), new THREE.Vector3(eastX, standTopY, htZ));
+  // Inward arrows.
+  addArrow(g, new THREE.Vector3(eastX, 0,         htZ), new THREE.Vector3(0,  1, 0));
+  addArrow(g, new THREE.Vector3(eastX, standTopY, htZ), new THREE.Vector3(0, -1, 0));
+  // Label.
+  addLabel(
+    g,
+    `${standTopY.toFixed(1)} m`,
+    new THREE.Vector3(eastX + 7, standMidY, htZ),
+    [12, 3],
+  );
+
+  // ── 3. Stand width (X direction, above top row) ───────────────────────────
+  const wY   = standTopY + 3;          // a few metres above the top row
+  const wZ   = standFrontZ + 3;        // slightly behind the front edge for readability
+  const wX0  = -STAND_W / 2;
+  const wX1  =  STAND_W / 2;
+
+  // Witness lines dropping from stand corners down to annotation height.
+  addLine(g, new THREE.Vector3(wX0, standTopY, wZ), new THREE.Vector3(wX0, wY + 1, wZ));
+  addLine(g, new THREE.Vector3(wX1, standTopY, wZ), new THREE.Vector3(wX1, wY + 1, wZ));
+  // Dimension line along X.
+  addLine(g, new THREE.Vector3(wX0, wY, wZ), new THREE.Vector3(wX1, wY, wZ));
+  // Inward arrows.
+  addArrow(g, new THREE.Vector3(wX0, wY, wZ), new THREE.Vector3( 1, 0, 0));
+  addArrow(g, new THREE.Vector3(wX1, wY, wZ), new THREE.Vector3(-1, 0, 0));
+  // Label.
+  addLabel(g, `${STAND_W} m`, new THREE.Vector3(0, wY + 2, wZ), [12, 3]);
+
+  scene.add(g);
 }
