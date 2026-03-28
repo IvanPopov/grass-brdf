@@ -1,6 +1,7 @@
 import GUI from 'lil-gui';
 import { LightRigParams, MAX_SHADER_LIGHTS, BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG } from '../config';
 import { GroupPhysics } from '../lighting/LightRig';
+import { GrassBRDFDebug, GrassBRDFParams } from '../scene/GrassBRDFParams';
 
 /** Read-only computed display updated after each rebuild. */
 interface ComputedDisplay {
@@ -28,7 +29,13 @@ export interface GuiHandle {
  * called after any parameter changes; the caller is responsible for rebuilding
  * the scene and then calling updateComputedDisplay() with fresh physics values.
  */
-export function buildGui(params: LightRigParams, onChange: () => void): GuiHandle {
+export function buildGui(
+  params: LightRigParams,
+  onChange: () => void,
+  grassParams: GrassBRDFParams,
+  grassDebug: GrassBRDFDebug,
+  onGrassChange: () => void,
+): GuiHandle {
   const gui = new GUI({ title: 'Stadium Lighting (FIFA Class V)' });
 
   /** Sets a hover tooltip on every DOM element inside a controller. */
@@ -41,6 +48,7 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   // ── Fixtures ─────────────────────────────────────────────────────────────
   const fix = gui.addFolder('Fixtures');
+  fix.close();
 
   // Hard upper bound for simulatedCount: total lights in scene must not exceed
   // MAX_SHADER_LIGHTS (DataTexture capacity in FieldMaterial).
@@ -160,6 +168,7 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   // ── Physical / colorimetric ───────────────────────────────────────────────
   const phys = gui.addFolder('Physical');
+  phys.close();
   tip(
     phys.add(params, 'colorTempK', 1_500, 12_000, 100)
       .name('CCT  [K]')
@@ -178,6 +187,7 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
 
   // ── Rig geometry ──────────────────────────────────────────────────────────
   const geom = gui.addFolder('Rig Geometry');
+  geom.close();
   tip(
     geom.add(params, 'rigHeight', 25, 70, 0.5)
       .name('Height  [m]')
@@ -212,6 +222,7 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
   };
 
   const comp = gui.addFolder('Computed (per SpotLight)');
+  comp.close();
   const c1 = tip(
     comp.add(computed, 'groupSize').name('Group size  [fix / SpotLight]').disable(),
     'Real fixtures represented by one simulated SpotLight.\n' +
@@ -247,6 +258,251 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
     c3.updateDisplay();
     c4.updateDisplay();
   }
+
+  // ── Grass BRDF ────────────────────────────────────────────────────────────
+  const grass = gui.addFolder('Grass BRDF');
+  grass.close();
+
+  tip(
+    grass.add(grassParams, 'grassBRDFMode', { 'Lambertian (debug)': 0, 'Physical OBC': 1 })
+      .name('BRDF mode')
+      .onChange(onGrassChange),
+    'Grass material model.\n' +
+    '  Lambertian: simple diffuse — preserves previous look, fast.\n' +
+    '  Physical OBC: Oriented-Blade Canopy BRDF with:\n' +
+    '    - Turbid medium single-scattering (Ross 1981)\n' +
+    '    - Campbell (1990) ellipsoidal leaf angle distribution\n' +
+    '    - Hot-spot retroreflection enhancement (Chen & Cihlar 1997)\n' +
+    '    - Soil visible through canopy gaps (gap fraction model)\n' +
+    '    - Multiple scattering (two-stream approx., Sellers 1985)\n' +
+    '    - Anisotropic GGX specular on blade face (Burley 2012)\n' +
+    '    - Mowing stripe pattern from alternating blade tilt',
+  );
+
+  const canopy = grass.addFolder('Canopy structure');
+  canopy.close();
+
+  tip(
+    canopy.add(grassParams, 'lai', 0.5, 8.0, 0.1)
+      .name('LAI  [m²/m²]')
+      .onChange(onGrassChange),
+    'Leaf Area Index: one-sided leaf area per unit ground area.\n' +
+    'Professional Lolium perenne pitch: 2.5–4.0  [Tegg & Lane 2004].\n' +
+    'Higher LAI → darker soil, stronger hot-spot, denser striping.',
+  );
+
+  tip(
+    canopy.add(grassParams, 'chiLAD', 0.1, 5.0, 0.05)
+      .name('LAD χ  [—]')
+      .onChange(onGrassChange),
+    'Campbell (1990) ellipsoidal LAD parameter χ:\n' +
+    '  χ < 1: erectophile (erect leaves) — typical for grass\n' +
+    '  χ = 1: spherical (random, G = 0.5)\n' +
+    '  χ > 1: planophile (flat leaves, crops)\n' +
+    'Lolium perenne: χ ≈ 0.4–0.6  [Lemaire & Chapman 1996].',
+  );
+
+  tip(
+    canopy.add(grassParams, 'bladeHeightM', 0.010, 0.080, 0.001)
+      .name('Blade height  [m]')
+      .onChange(onGrassChange),
+    'Grass cutting height (= canopy depth).\n' +
+    'FIFA match-day standard: 25–30 mm.\n' +
+    'Used with blade width to compute hot-spot rL = width / height.',
+  );
+
+  tip(
+    canopy.add(grassParams, 'bladeWidthM', 0.001, 0.010, 0.0005)
+      .name('Blade width  [m]')
+      .onChange(onGrassChange),
+    'Mean blade width for Lolium perenne: 3–6 mm.\n' +
+    'Hot-spot rL = bladeWidth / bladeHeight.\n' +
+    'Narrower blades → broader, softer hot-spot lobe.',
+  );
+
+  tip(
+    canopy.add(grassParams, 'mowingStripeWidth', 2.0, 12.0, 0.1)
+      .name('Stripe width  [m]')
+      .onChange(onGrassChange),
+    'Mowing stripe width in metres.\n' +
+    'Adjacent stripes have blades tilted in opposite directions.\n' +
+    'FIFA broadcast standard: 5.0–5.5 m.',
+  );
+
+  tip(
+    canopy.add(grassParams, 'mowingStripesEnabled')
+      .name('Mowing stripes')
+      .onChange(onGrassChange),
+    'Alternating blade lean along the pitch length (broadcast stripe pattern).\n' +
+    'When off: uniform blade direction — no light/dark stripe contrast.\n' +
+    'Blade-face anisotropic specular (GGX) stays active in both cases.',
+  );
+
+  tip(
+    canopy.add(grassParams, 'bladeTiltDeg', 30, 89, 1)
+      .name('Blade tilt  [deg]')
+      .onChange(onGrassChange),
+    'Mean blade tilt angle from horizontal [degrees].\n' +
+    'Higher = more erect blades → stronger stripe contrast.\n' +
+    'Typical post-cut: 60–80°.  Flattened (rain, play): 40–55°.\n' +
+    'At 70°: front stripe reflectance ≈ 2.1× back stripe.',
+  );
+
+  const leafOpt = grass.addFolder('Leaf optics (linear sRGB)');
+  leafOpt.close();
+
+  tip(
+    leafOpt.add(grassParams, 'bladeAlbedoR', 0.0, 0.3, 0.005)
+      .name('Blade ρ  R')
+      .onChange(onGrassChange),
+    'Blade reflectance ρ_leaf, red channel (linear, not gamma).\n' +
+    'LOPEX93 database for Lolium perenne: ≈ 0.045.\n' +
+    'Natural grass is dark in red — chlorophyll absorption.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'bladeAlbedoG', 0.0, 0.4, 0.005)
+      .name('Blade ρ  G')
+      .onChange(onGrassChange),
+    'Blade reflectance ρ_leaf, green channel (linear).\n' +
+    'LOPEX93: ≈ 0.115.  This is the primary green appearance driver.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'bladeAlbedoB', 0.0, 0.2, 0.005)
+      .name('Blade ρ  B')
+      .onChange(onGrassChange),
+    'Blade reflectance ρ_leaf, blue channel (linear).\n' +
+    'LOPEX93: ≈ 0.025.  Low due to chlorophyll a absorption.',
+  );
+
+  tip(
+    leafOpt.add(grassParams, 'bladeTransmittanceR', 0.0, 0.2, 0.005)
+      .name('Blade τ  R')
+      .onChange(onGrassChange),
+    'Blade transmittance τ_leaf, red channel.\n' +
+    'PROSPECT calibration: ≈ 0.015.  Thin blades transmit some red.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'bladeTransmittanceG', 0.0, 0.3, 0.005)
+      .name('Blade τ  G')
+      .onChange(onGrassChange),
+    'Blade transmittance τ_leaf, green channel.\n' +
+    'PROSPECT: ≈ 0.045.  Highest channel — green glow of backlit grass.\n' +
+    'ω = ρ + τ is the single-scattering albedo used in canopy scattering.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'bladeTransmittanceB', 0.0, 0.15, 0.005)
+      .name('Blade τ  B')
+      .onChange(onGrassChange),
+    'Blade transmittance τ_leaf, blue channel.\n' +
+    'PROSPECT: ≈ 0.010.',
+  );
+
+  tip(
+    leafOpt.add(grassParams, 'soilAlbedoR', 0.0, 0.4, 0.005)
+      .name('Soil ρ  R')
+      .onChange(onGrassChange),
+    'Soil / infill diffuse reflectance, red channel (linear).\n' +
+    'Moist sandy loam (Lobell & Asner 2002): ≈ 0.090.\n' +
+    'Rubber crumb infill (artificial): 0.03–0.06.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'soilAlbedoG', 0.0, 0.4, 0.005)
+      .name('Soil ρ  G')
+      .onChange(onGrassChange),
+    'Soil diffuse reflectance, green channel (linear).\n' +
+    'Moist sandy loam: ≈ 0.075.',
+  );
+  tip(
+    leafOpt.add(grassParams, 'soilAlbedoB', 0.0, 0.3, 0.005)
+      .name('Soil ρ  B')
+      .onChange(onGrassChange),
+    'Soil diffuse reflectance, blue channel (linear).\n' +
+    'Moist sandy loam: ≈ 0.050.',
+  );
+
+  // ── Component toggles ───────────────────────────────────────────────────────
+  const dbgFolder = grass.addFolder('Components (debug toggles)');
+  dbgFolder.close();
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgCanopySS')
+      .name('Canopy single-scatter')
+      .onChange(onGrassChange),
+    'Turbid-medium single scattering from canopy blades.\n' +
+    '[Ross 1981, eq. 3.43]\n' +
+    'Dominant diffuse term — primary driver of canopy colour.',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgHotSpot')
+      .name('Hot-spot (retroreflect.)')
+      .onChange(onGrassChange),
+    'Retroreflection enhancement: when light ≈ view direction,\n' +
+    'illuminated and viewed gaps are correlated → no visible shadows.\n' +
+    '[Chen & Cihlar 1997]\n' +
+    'When off: Chs = 1.0 (base turbid-medium level, no peak).',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgSoil')
+      .name('Soil background')
+      .onChange(onGrassChange),
+    'Lambertian soil/infill visible through canopy gaps.\n' +
+    'Attenuated by gap fraction from both illumination and view paths.\n' +
+    'At LAI=3.5: soil contributes ≈5–15% of total reflectance.',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgMS')
+      .name('Multiple scattering')
+      .onChange(onGrassChange),
+    'Isotropic multiple-scattering correction (two-stream, Sellers 1985).\n' +
+    'Accounts for energy missing from single-scattering approximation.\n' +
+    'Typical contribution: 15–25% of total reflectance in the visible range.',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgSpecular')
+      .name('Blade face specular')
+      .onChange(onGrassChange),
+    'Anisotropic GGX specular from the waxy blade cuticle.\n' +
+    'Evaluated on the blade face normal → produces mowing stripe brightness.\n' +
+    '[Burley 2012 NDF + Heitz 2014 G2 + Schlick Fresnel]\n' +
+    'Disabling shows pure diffuse response.',
+  );
+
+  const specFolder = grass.addFolder('Blade specular (GGX)');
+  specFolder.close();
+
+  tip(
+    specFolder.add(grassParams, 'bladeCuticleF0', 0.01, 0.08, 0.001)
+      .name('Cuticle F0  [—]')
+      .onChange(onGrassChange),
+    'Fresnel reflectance at normal incidence.\n' +
+    'Derived from cuticle wax refractive index n = 1.40 (Woolley 1971):\n' +
+    '  F0 = ((1.40-1)/(1.40+1))² = 0.02778 ≈ 0.028.\n' +
+    'Higher values simulate wet or artificially coated blades.',
+  );
+
+  tip(
+    specFolder.add(grassParams, 'alphaT', 0.01, 0.5, 0.01)
+      .name('αT  along blade axis')
+      .onChange(onGrassChange),
+    'Anisotropic GGX roughness along blade long axis (tangent direction).\n' +
+    'Blade surface has longitudinal ridges → lower roughness along length.\n' +
+    'AFM data (Koch et al. 2009): effective αT ≈ 0.10–0.20.\n' +
+    'Lower value = sharper specular streak parallel to blade long axis.',
+  );
+
+  tip(
+    specFolder.add(grassParams, 'alphaB', 0.1, 1.0, 0.01)
+      .name('αB  across blade')
+      .onChange(onGrassChange),
+    'Anisotropic GGX roughness across blade width (bitangent direction).\n' +
+    'Serrated margins and cell boundaries create higher roughness across blade.\n' +
+    'Koch et al. 2009: effective αB ≈ 0.50–0.70.\n' +
+    'Higher value = broader, more diffuse specular in the perpendicular direction.',
+  );
 
   return { gui, updateComputedDisplay };
 }

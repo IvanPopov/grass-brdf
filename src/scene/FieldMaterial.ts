@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MAX_SHADER_LIGHTS } from '../config';
+import { GrassBRDFParams, GrassBRDFDebug } from './GrassBRDFParams';
 import fieldVertGlsl from '../shaders/field.vert.glsl';
 import fieldFragGlsl from '../shaders/field.frag.glsl';
 
@@ -51,23 +52,63 @@ export class FieldMaterial {
       iesExponent:  { value: 3.0 },
       lightColor:   { value: new THREE.Color(1, 1, 1) },
       lightingOnly: { value: 0.0 },
+
+      // Camera position for view-direction dependent BRDF.
+      // Updated each frame by updateGrass().
+      cameraPos: { value: new THREE.Vector3() },
+
+      // Grass BRDF control (0 = Lambertian, 1 = physical OBC)
+      grassBRDFMode: { value: 0.0 },
+
+      // Canopy structure
+      lai:          { value: 3.5 },
+      chiLAD:       { value: 0.5 },
+      bladeRL:      { value: 0.004 / 0.027 }, // bladeWidthM / bladeHeightM
+
+      // Blade face tilt for mowing stripe specular
+      bladeTiltRad: { value: 70.0 * Math.PI / 180.0 },
+
+      // Leaf optical properties (linear sRGB)
+      bladeAlbedo: { value: new THREE.Vector3(0.045, 0.115, 0.025) },
+      bladeTau:    { value: new THREE.Vector3(0.015, 0.045, 0.010) },
+      soilAlbedo:  { value: new THREE.Vector3(0.090, 0.075, 0.050) },
+
+      // Cuticle specular
+      bladeCuticleF0: { value: 0.028 },
+      alphaT:         { value: 0.15 },
+      alphaB:         { value: 0.60 },
+
+      // Mowing stripe width [m].
+      mowingStripeWidth: { value: 5.4 },
+      mowingStripesEnabled: { value: 1.0 },
+
+      // Per-component debug flags (1.0 = on, 0.0 = off).
+      dbgCanopySS: { value: 1.0 },
+      dbgHotSpot:  { value: 1.0 },
+      dbgSoil:     { value: 1.0 },
+      dbgMS:       { value: 1.0 },
+      dbgSpecular: { value: 1.0 },
     };
 
     this.material = this.createMaterial(grassLinear);
   }
 
   /**
-   * Returns a new ShaderMaterial sharing all light uniforms via reference.
-   * Only baseColor is per-surface.
+   * Returns a new ShaderMaterial sharing all lighting and BRDF uniforms.
+   * Per-surface overrides: baseColor, isSurfaceGrass.
+   *
+   * isSurfaceGrass: 1.0 = apply physical grass BRDF when mode = 1.
+   *                 0.0 = always use Lambertian (concrete stands, etc.)
    */
-  createMaterial(baseColor: THREE.Color): THREE.ShaderMaterial {
+  createMaterial(baseColor: THREE.Color, isSurfaceGrass = 1.0): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
       glslVersion:    THREE.GLSL3,
       vertexShader:   fieldVertGlsl,
       fragmentShader: fieldFragGlsl,
       uniforms: {
         ...this.uniforms,
-        baseColor: { value: baseColor.clone() },
+        baseColor:      { value: baseColor.clone() },
+        isSurfaceGrass: { value: isSurfaceGrass },
       },
       polygonOffset:       true,
       polygonOffsetFactor: -1,
@@ -136,5 +177,42 @@ export class FieldMaterial {
 
   setLightingOnly(enabled: boolean): void {
     this.uniforms['lightingOnly'].value = enabled ? 1.0 : 0.0;
+  }
+
+  /**
+   * Uploads grass BRDF parameters, debug flags, and camera position to the GPU.
+   * Call once per frame (or whenever params change) from the render loop.
+   */
+  updateGrass(p: GrassBRDFParams, dbg: GrassBRDFDebug, cameraWorldPos: THREE.Vector3): void {
+    const u = this.uniforms;
+
+    (u['cameraPos'].value as THREE.Vector3).copy(cameraWorldPos);
+    u['grassBRDFMode'].value    = p.grassBRDFMode;
+
+    u['lai'].value              = p.lai;
+    u['chiLAD'].value           = p.chiLAD;
+    u['bladeRL'].value          = p.bladeWidthM / p.bladeHeightM;
+    u['bladeTiltRad'].value     = p.bladeTiltDeg * Math.PI / 180.0;
+
+    const ba = u['bladeAlbedo'].value as THREE.Vector3;
+    ba.set(p.bladeAlbedoR, p.bladeAlbedoG, p.bladeAlbedoB);
+
+    const bt = u['bladeTau'].value as THREE.Vector3;
+    bt.set(p.bladeTransmittanceR, p.bladeTransmittanceG, p.bladeTransmittanceB);
+
+    const sa = u['soilAlbedo'].value as THREE.Vector3;
+    sa.set(p.soilAlbedoR, p.soilAlbedoG, p.soilAlbedoB);
+
+    u['bladeCuticleF0'].value    = p.bladeCuticleF0;
+    u['alphaT'].value            = p.alphaT;
+    u['alphaB'].value            = p.alphaB;
+    u['mowingStripeWidth'].value     = p.mowingStripeWidth;
+    u['mowingStripesEnabled'].value  = p.mowingStripesEnabled ? 1.0 : 0.0;
+
+    u['dbgCanopySS'].value = dbg.dbgCanopySS ? 1.0 : 0.0;
+    u['dbgHotSpot'].value  = dbg.dbgHotSpot  ? 1.0 : 0.0;
+    u['dbgSoil'].value     = dbg.dbgSoil     ? 1.0 : 0.0;
+    u['dbgMS'].value       = dbg.dbgMS       ? 1.0 : 0.0;
+    u['dbgSpecular'].value = dbg.dbgSpecular  ? 1.0 : 0.0;
   }
 }

@@ -23,6 +23,10 @@ export function createField(scene: THREE.Scene): { mesh: THREE.Mesh; fieldMat: F
 
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_W, FIELD_H), fieldMat.material);
   mesh.rotation.x = -Math.PI / 2;
+  // Raise field 5 mm above Y=0 to eliminate Z-fighting with the grid plane.
+  // polygonOffset alone is insufficient at top-down view (slope ≈ 0 → Factor
+  // contribution vanishes; only Units applies, and 2 units is below precision).
+  mesh.position.y = 0.005;
   mesh.receiveShadow = false;
   scene.add(mesh);
 

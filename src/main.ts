@@ -11,10 +11,17 @@ import { createFieldAnnotations, createStandAnnotations, HeightAnnotation } from
 import { Stands } from './scene/Stands';
 import { buildGui } from './ui/Gui';
 import { IlluminanceDebug } from './debug/IlluminanceDebug';
+import { DEFAULT_GRASS_BRDF, DEFAULT_GRASS_DEBUG, GrassBRDFDebug, GrassBRDFParams } from './scene/GrassBRDFParams';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 // Shallow copy so GUI mutations do not modify the original defaults.
 const params: LightRigParams = { ...DEFAULT_PARAMS };
+
+// Grass BRDF parameters — mutable object shared with GUI.
+const grassParams: GrassBRDFParams = { ...DEFAULT_GRASS_BRDF };
+
+// Per-component debug toggles — mutable object shared with GUI.
+const grassDebug: GrassBRDFDebug = { ...DEFAULT_GRASS_DEBUG };
 
 // ── WebGL renderer ────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -78,7 +85,11 @@ const debug = new IlluminanceDebug();
 debug.init(scene);
 
 // ── GUI ───────────────────────────────────────────────────────────────────────
-const { gui, updateComputedDisplay } = buildGui(params, rebuild);
+function onGrassChange(): void {
+  fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+}
+
+const { gui, updateComputedDisplay } = buildGui(params, rebuild, grassParams, grassDebug, onGrassChange);
 
 // Debug controls
 const debugFolder = gui.addFolder('Debug');
@@ -135,6 +146,10 @@ function rebuild(): void {
   lightRigVisual.build(lightRig.lights, params);
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
   fieldMat.update(lightRig.lights, params.iesExponent);
+
+  // Upload current grass BRDF params, debug flags, and camera position.
+  fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+
   debug.iesExponent        = params.iesExponent;
   debug.fixtureLuminousArea = params.fixtureLuminousArea;
   debug.fieldReflectance    = params.fieldReflectance;
@@ -151,6 +166,11 @@ rebuild();
 function animate(): void {
   requestAnimationFrame(animate);
   orbit.update();
+
+  // Update camera position in the BRDF shader every frame so the view-direction
+  // dependent shading (specular, hot-spot) responds to camera movement.
+  fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 }

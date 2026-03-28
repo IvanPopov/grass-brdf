@@ -70,7 +70,8 @@ export class Stands {
     // Remove any existing geometry.
     this.group.clear();
 
-    const mat = fieldMat.createMaterial(CONCRETE_COLOR);
+    // isSurfaceGrass = 0.0 → always Lambertian regardless of grass BRDF mode.
+    const mat = fieldMat.createMaterial(CONCRETE_COLOR, 0.0);
 
     for (let i = 0; i < NUM_ROWS; i++) {
       // Floor height of this row (underside of slab sits here).
