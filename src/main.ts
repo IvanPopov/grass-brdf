@@ -206,7 +206,7 @@ function animate(): void {
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 
-  grassPatchView.render(renderer, toneMapping, toneMappingExposure, patchDebug.gtao);
+  grassPatchView.render(renderer, toneMapping, toneMappingExposure, patchDebug);
 }
 
 animate();

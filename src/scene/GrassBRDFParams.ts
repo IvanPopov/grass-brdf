@@ -656,10 +656,22 @@ export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
 export interface GrassPatchDebug {
   /** Ground-truth ambient occlusion pass on the patch (EffectComposer + GTAOPass). */
   gtao: boolean;
+  /** Wireframe cone helpers for the two cornice SpotLights (patch scene only). */
+  showSpotCones: boolean;
+  /** GTAO occlusion scale exponent (higher = stronger contact darkening). */
+  gtaoScale: number;
+  /** World-space GTAO sampling radius (m). */
+  gtaoRadius: number;
 }
 
+/** Default Jimenez-style radius factor (0.5 * 1.457) used by the patch GTAOPass. */
+export const PATCH_GTAO_DEFAULT_RADIUS_M = 0.5 * 1.457;
+
 export const DEFAULT_PATCH_DEBUG: GrassPatchDebug = {
-  gtao: true,
+  gtao:          true,
+  showSpotCones: false,
+  gtaoScale:     2.2,
+  gtaoRadius:    PATCH_GTAO_DEFAULT_RADIUS_M,
 };
 
 /**

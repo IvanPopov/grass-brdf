@@ -6,6 +6,7 @@ import {
   ColorManagement,
   LinearToneMapping,
   NeutralToneMapping,
+  NoToneMapping,
   RawShaderMaterial,
   ReinhardToneMapping,
   SRGBTransfer,
@@ -19,7 +20,11 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { GrassBRDFParams } from '../scene/GrassBRDFParams';
+import {
+  GrassBRDFParams,
+  DEFAULT_PATCH_DEBUG,
+  type GrassPatchDebug,
+} from '../scene/GrassBRDFParams';
 import { cctToColor } from '../lighting/colorTemp';
 import { sampleEh } from './IlluminanceSampler';
 import { campbellG, campbellM, sampleZenithFromCampbell } from '../math/campbellInclination';
@@ -48,6 +53,102 @@ const _patchLookAt = new THREE.Vector3(0, 0.01, 0);
 
 /** Distance from patch look-at point to camera [m]. */
 const PATCH_CAMERA_DISTANCE_M = 0.52;
+
+/** Emulate two rig fixtures on opposite sidelines (across pitch width, +/-Z); Y up, X along length. */
+const CORNICE_HEIGHT_M = 1.05;
+const CORNICE_OFFSET_ACROSS_M = 1.28;
+/** Cone wide enough for the 25 cm tile from ~1.3 m slant range [rad]. */
+const CORNICE_SPOT_ANGLE_RAD = 0.55;
+const CORNICE_SPOT_PENUMBRA = 0.22;
+
+/** Wireframe cone length only (m); patch tile is 25 cm; keeps debug frustum readable. */
+const PATCH_SPOT_CONE_VIS_LEN_M = 0.14;
+/** Place cone apex this far from the hit point back toward the light so the glyph stays inside the patch camera frustum (real rig is ~1.3 m away). */
+const PATCH_SPOT_VIS_APEX_BACK_M = 0.11;
+
+/** Main patch content; spot cone helpers render on PATCH_LAYER_SPOT_CONE after GTAO to skip tonemapping. */
+const PATCH_LAYER_SCENE = 0;
+const PATCH_LAYER_SPOT_CONE = 1;
+
+const _patchConeTarget = new THREE.Vector3();
+const _patchLightPos = new THREE.Vector3();
+const _patchConeDir = new THREE.Vector3();
+const _patchConeApex = new THREE.Vector3();
+const _patchConeZ = new THREE.Vector3(0, 0, 1);
+
+/** Same line layout as three.js SpotLightHelper; scale uses PATCH_SPOT_CONE_VIS_LEN_M, not light.distance. */
+function buildPatchSpotConeWireGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [
+    0, 0, 0, 0, 0, 1,
+    0, 0, 0, 1, 0, 1,
+    0, 0, 0, -1, 0, 1,
+    0, 0, 0, 0, 1, 1,
+    0, 0, 0, 0, -1, 1,
+  ];
+  for (let i = 0, j = 1, l = 32; i < l; i++, j++) {
+    const p1 = (i / l) * Math.PI * 2;
+    const p2 = (j / l) * Math.PI * 2;
+    positions.push(Math.cos(p1), Math.sin(p1), 1, Math.cos(p2), Math.sin(p2), 1);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  return geometry;
+}
+
+let _patchSpotConeWireGeometry: THREE.BufferGeometry | null = null;
+
+function getPatchSpotConeWireGeometry(): THREE.BufferGeometry {
+  if (!_patchSpotConeWireGeometry) {
+    _patchSpotConeWireGeometry = buildPatchSpotConeWireGeometry();
+  }
+  return _patchSpotConeWireGeometry;
+}
+
+/**
+ * Compact spot frustum wire near the patch hit point: same direction as the cornice SpotLight
+ * toward its target, but not at stadium world positions (those lie outside the patch camera frustum).
+ * depthTest off so the overlay pass stays visible after GTAO and tonemap.
+ */
+class PatchSpotConeWire extends THREE.Object3D {
+  readonly cone: THREE.LineSegments;
+
+  constructor(
+    private readonly light: THREE.SpotLight,
+    colorHex: number,
+    private readonly visLengthM: number,
+  ) {
+    super();
+    const material = new THREE.LineBasicMaterial({
+      color:       colorHex,
+      fog:         false,
+      toneMapped:  false,
+      depthTest:   false,
+      depthWrite:  false,
+    });
+    this.cone = new THREE.LineSegments(getPatchSpotConeWireGeometry(), material);
+    this.add(this.cone);
+    this.layers.set(PATCH_LAYER_SPOT_CONE);
+    this.cone.layers.set(PATCH_LAYER_SPOT_CONE);
+  }
+
+  update(): void {
+    this.light.updateWorldMatrix(true, false);
+    this.light.target.updateWorldMatrix(true, false);
+    this.light.getWorldPosition(_patchLightPos);
+    _patchConeTarget.setFromMatrixPosition(this.light.target.matrixWorld);
+    _patchConeDir.subVectors(_patchConeTarget, _patchLightPos).normalize();
+    _patchConeApex.copy(_patchConeTarget).addScaledVector(_patchConeDir, -PATCH_SPOT_VIS_APEX_BACK_M);
+    this.position.copy(_patchConeApex);
+    this.quaternion.setFromUnitVectors(_patchConeZ, _patchConeDir);
+    this.scale.set(1, 1, 1);
+    this.updateMatrixWorld(true);
+    const coneLength = this.visLengthM;
+    const coneWidth = coneLength * Math.tan(this.light.angle);
+    this.cone.scale.set(coneWidth, coneWidth, coneLength);
+    this.cone.quaternion.identity();
+    this.cone.position.set(0, 0, 0);
+  }
+}
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -153,13 +254,13 @@ function ambientMultiplierFromMS(grass: GrassBRDFParams): number {
  * GrassBRDFParams. Rendered in the lower-left corner via scissor (same renderer
  * as the stadium). Uses MeshStandardMaterial (GGX + diffuse). Ground uses soil
  * albedo; blades use leaf albedo. Directional light intensity is scaled from
- * horizontal illuminance at field centre (sampleEh).
+ * horizontal illuminance at field centre (sampleEh), split evenly between two
+ * cornice SpotLights on +/-Z (across pitch width), both casting shadows.
  *
  * Optional GTAO: EffectComposer + RenderPass + GTAOPass in the
  * patch viewport only. Hemisphere sky colour is slightly mixed toward blade
  * albedo when the MS-derived ambient term is large (rough diffuse inter-reflection
  * cue; not a substitute for Sellers two-stream in field.frag.glsl).
- * Contact shading uses directional shadow map on the patch only.
  */
 export class GrassBRDFPatchView {
   readonly scene: THREE.Scene;
@@ -168,7 +269,10 @@ export class GrassBRDFPatchView {
   private readonly groundLeft: THREE.Mesh;
   private readonly groundRight: THREE.Mesh;
   private readonly instancedBlades: THREE.InstancedMesh;
-  private readonly dirLight: THREE.DirectionalLight;
+  private readonly spotCorniceL: THREE.SpotLight;
+  private readonly spotCorniceR: THREE.SpotLight;
+  private readonly spotConeHelpL: PatchSpotConeWire;
+  private readonly spotConeHelpR: PatchSpotConeWire;
   private readonly ambLight: THREE.AmbientLight;
   private readonly hemi: THREE.HemisphereLight;
 
@@ -243,19 +347,42 @@ export class GrassBRDFPatchView {
     this.hemi.groundColor.setRGB(0.22, 0.2, 0.17, THREE.LinearSRGBColorSpace);
     this.scene.add(this.hemi);
 
-    this.dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-    this.dirLight.position.set(-0.6, 1.2, 0.45);
-    this.dirLight.target.position.set(0, 0, 0);
-    this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.set(512, 512);
-    this.dirLight.shadow.camera.near = 0.05;
-    this.dirLight.shadow.camera.far = 4;
-    this.dirLight.shadow.camera.left = -0.5;
-    this.dirLight.shadow.camera.right = 0.5;
-    this.dirLight.shadow.camera.top = 0.5;
-    this.dirLight.shadow.camera.bottom = -0.5;
-    this.scene.add(this.dirLight);
-    this.scene.add(this.dirLight.target);
+    const patchTargetY = 0.01;
+    this.spotCorniceL = new THREE.SpotLight(
+      0xffffff,
+      0.5,
+      0,
+      CORNICE_SPOT_ANGLE_RAD,
+      CORNICE_SPOT_PENUMBRA,
+      0,
+    );
+    this.spotCorniceR = new THREE.SpotLight(
+      0xffffff,
+      0.5,
+      0,
+      CORNICE_SPOT_ANGLE_RAD,
+      CORNICE_SPOT_PENUMBRA,
+      0,
+    );
+    for (const s of [this.spotCorniceL, this.spotCorniceR]) {
+      s.castShadow = true;
+      s.shadow.mapSize.set(512, 512);
+      s.shadow.camera.near = 0.08;
+      s.shadow.camera.far = 5;
+      s.shadow.bias = -0.0001;
+      s.target.position.set(0, patchTargetY, 0);
+      this.scene.add(s);
+      this.scene.add(s.target);
+    }
+    this.spotCorniceL.position.set(0, CORNICE_HEIGHT_M, -CORNICE_OFFSET_ACROSS_M);
+    this.spotCorniceR.position.set(0, CORNICE_HEIGHT_M, CORNICE_OFFSET_ACROSS_M);
+
+    this.spotConeHelpL = new PatchSpotConeWire(this.spotCorniceL, 0x8cb4e8, PATCH_SPOT_CONE_VIS_LEN_M);
+    this.spotConeHelpR = new PatchSpotConeWire(this.spotCorniceR, 0xe8c48c, PATCH_SPOT_CONE_VIS_LEN_M);
+    this.spotConeHelpL.visible = false;
+    this.spotConeHelpR.visible = false;
+    this.scene.add(this.spotConeHelpL);
+    this.scene.add(this.spotConeHelpR);
   }
 
   setScreenSize(widthPx: number, heightPx: number): void {
@@ -277,6 +404,50 @@ export class GrassBRDFPatchView {
     this.patchComposer = null;
     this.patchGtaoPass = null;
     this.patchComposerVp = 0;
+  }
+
+  /**
+   * Draws spot cone helpers after the GTAO chain so lines are not run through AO or patch tonemapping.
+   * Same viewport and scissor as the patch must already be set on the renderer.
+   */
+  private applyPatchGtaoDebug(patchDebug: GrassPatchDebug): void {
+    const gp = this.patchGtaoPass;
+    if (!gp) {
+      return;
+    }
+    gp.blendIntensity = 1;
+    gp.updateGtaoMaterial({
+      radius:            patchDebug.gtaoRadius,
+      distanceExponent:  2.0,
+      thickness:         1.0,
+      distanceFallOff:   0.615,
+      scale:             patchDebug.gtaoScale,
+      samples:           16,
+      screenSpaceRadius: false,
+    });
+  }
+
+  private renderSpotConeOverlay(
+    renderer: THREE.WebGLRenderer,
+    toneMapping: THREE.ToneMapping,
+    toneMappingExposure: number,
+  ): void {
+    const prevMask = this.camera.layers.mask;
+    const prevOutCs = renderer.outputColorSpace;
+    this.camera.layers.disable(PATCH_LAYER_SCENE);
+    this.camera.layers.enable(PATCH_LAYER_SPOT_CONE);
+
+    renderer.toneMapping = NoToneMapping;
+    renderer.toneMappingExposure = 1;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(this.scene, this.camera);
+
+    renderer.toneMapping = toneMapping;
+    renderer.toneMappingExposure = toneMappingExposure;
+    renderer.outputColorSpace = prevOutCs;
+    this.camera.layers.mask = prevMask;
   }
 
   /**
@@ -317,14 +488,13 @@ export class GrassBRDFPatchView {
     // (github.com/GameTechDev/XeGTAO, XeGTAO.h) which implements that report.
     // three.js GTAOPass maps: radius (world/view), distanceExponent (sample distribution),
     // distanceFallOff (falloff range), scale (final occlusion pow), thickness (view-space Z test).
-    const JIMENEZ_EFFECT_RADIUS = 0.5;
-    const JIMENEZ_RADIUS_MULTIPLIER = 1.457;
+    const dd = DEFAULT_PATCH_DEBUG;
     const aoParams = {
-      radius:            JIMENEZ_EFFECT_RADIUS * JIMENEZ_RADIUS_MULTIPLIER,
+      radius:            dd.gtaoRadius,
       distanceExponent:  2.0,
       thickness:         1.0,
       distanceFallOff:   0.615,
-      scale:             2.2,
+      scale:             dd.gtaoScale,
       samples:           16,
       screenSpaceRadius: false,
     };
@@ -341,7 +511,7 @@ export class GrassBRDFPatchView {
     gp.updateGtaoMaterial(aoParams);
     gp.updatePdMaterial(pdParams);
     gp.output = GTAOPass.OUTPUT.Default;
-    gp.blendIntensity = 0.55;
+    gp.blendIntensity = 1;
 
     const outPass = new PatchTonemapPass();
 
@@ -464,14 +634,17 @@ export class GrassBRDFPatchView {
     colorTempK: number,
   ): void {
     this.lightTint.copy(cctToColor(colorTempK));
-    this.dirLight.color.copy(this.lightTint);
+    this.spotCorniceL.color.copy(this.lightTint);
+    this.spotCorniceR.color.copy(this.lightTint);
     this.ambLight.color.copy(this.lightTint);
     this.hemi.color.copy(this.lightTint);
 
     const eh = sampleEh(lights, _ehPoint, iesExponent);
     const ehEff = Math.max(eh, 400);
     const lux = THREE.MathUtils.clamp(ehEff * 0.7, 800, 22000);
-    this.dirLight.intensity = lux;
+    const halfLux = lux * 0.5;
+    this.spotCorniceL.intensity = halfLux;
+    this.spotCorniceR.intensity = halfLux;
 
     const msAmb = ambientMultiplierFromMS(grass);
     this.ambLight.intensity = 0.14 + msAmb;
@@ -516,9 +689,17 @@ export class GrassBRDFPatchView {
     renderer: THREE.WebGLRenderer,
     toneMapping: THREE.ToneMapping,
     toneMappingExposure: number,
-    patchGtaoEnabled: boolean,
+    patchDebug: GrassPatchDebug,
   ): void {
     const w = this.viewportPx;
+    const patchGtaoEnabled = patchDebug.gtao;
+
+    this.spotConeHelpL.visible = patchDebug.showSpotCones;
+    this.spotConeHelpR.visible = patchDebug.showSpotCones;
+    if (patchDebug.showSpotCones) {
+      this.spotConeHelpL.update();
+      this.spotConeHelpR.update();
+    }
     const h = this.viewportPx;
     const left = this.marginPx;
     const bottom = this.marginPx;
@@ -527,6 +708,7 @@ export class GrassBRDFPatchView {
     renderer.getViewport(prev);
     const prevTest = renderer.getScissorTest();
     const prevAutoClear = renderer.autoClear;
+    const prevCamMask = this.camera.layers.mask;
 
     renderer.toneMapping = toneMapping;
     renderer.toneMappingExposure = toneMappingExposure;
@@ -539,15 +721,28 @@ export class GrassBRDFPatchView {
 
     if (patchGtaoEnabled) {
       this.ensurePatchComposer(renderer, w);
+      this.applyPatchGtaoDebug(patchDebug);
+      this.camera.layers.disable(PATCH_LAYER_SPOT_CONE);
+      this.camera.layers.enable(PATCH_LAYER_SCENE);
       if (this.patchComposer) {
         this.patchComposer.renderToScreen = true;
         this.patchComposer.render();
       }
+      if (patchDebug.showSpotCones) {
+        this.renderSpotConeOverlay(renderer, toneMapping, toneMappingExposure);
+      }
     } else {
       this.disposePatchComposer();
+      this.camera.layers.enable(PATCH_LAYER_SCENE);
+      if (patchDebug.showSpotCones) {
+        this.camera.layers.enable(PATCH_LAYER_SPOT_CONE);
+      } else {
+        this.camera.layers.disable(PATCH_LAYER_SPOT_CONE);
+      }
       renderer.render(this.scene, this.camera);
     }
 
+    this.camera.layers.mask = prevCamMask;
     renderer.setViewport(prev.x, prev.y, prev.z, prev.w);
     renderer.setScissorTest(prevTest);
     renderer.autoClear = prevAutoClear;

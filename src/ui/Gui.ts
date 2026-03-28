@@ -1,7 +1,12 @@
 import GUI from 'lil-gui';
 import { LightRigParams, MAX_SHADER_LIGHTS, BEAM_ANGLE_MIN_DEG, BEAM_ANGLE_MAX_DEG } from '../config';
 import { GroupPhysics } from '../lighting/LightRig';
-import { GrassBRDFDebug, GrassBRDFParams, GrassPatchDebug } from '../scene/GrassBRDFParams';
+import {
+  GrassBRDFDebug,
+  GrassBRDFParams,
+  GrassPatchDebug,
+  PATCH_GTAO_DEFAULT_RADIUS_M,
+} from '../scene/GrassBRDFParams';
 
 /** Read-only computed display updated after each rebuild. */
 interface ComputedDisplay {
@@ -516,11 +521,29 @@ export function buildGui(
 
   const patchDbg = gui.addFolder('Grass patch (debug)');
   patchDbg.close();
+
   tip(
-    patchDbg.add(patchDebug, 'gtao').name('GTAO'),
+    patchDbg.add(patchDebug, 'showSpotCones').name('Spot cones'),
+    'Wireframe cone helpers for the two cornice SpotLights in the patch scene (direction only).',
+  );
+
+  const patchGtaoFolder = patchDbg.addFolder('GTAO');
+  patchGtaoFolder.close();
+  tip(
+    patchGtaoFolder.add(patchDebug, 'gtao').name('Enable'),
     'Screen-space GTAO on the lower-left MeshStandard turf patch only.\n' +
     'Does not affect field.frag.glsl. Uses the same ACES + sRGB path as the main view.\n' +
     'Turn off to save GPU when the patch is not needed.',
+  );
+  tip(
+    patchGtaoFolder.add(patchDebug, 'gtaoScale', 0.5, 5, 0.05).name('Occlusion scale'),
+    'Exponent on the raw occlusion term (Jimenez GTAO scale).\n' +
+    'Higher values deepen contact shadows and creases; too high may crush mid-tones.',
+  );
+  tip(
+    patchGtaoFolder.add(patchDebug, 'gtaoRadius', 0.1, 3, 0.02).name('Radius m'),
+    'World-space sampling radius for GTAO (meters). Wider radius gathers occlusion from a larger neighborhood.\n' +
+    `Default ${PATCH_GTAO_DEFAULT_RADIUS_M.toFixed(3)} m matches the stock Jimenez preset.`,
   );
 
   return { gui, updateComputedDisplay };
