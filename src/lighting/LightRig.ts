@@ -22,6 +22,9 @@ export interface SpotMeta {
   intensityCd:  number; // [cd]
   solidAngle:   number; // [sr]
   aimTarget:    THREE.Vector3;
+  angleV:       number; // vertical half-angle [rad] (elliptical TIR lens model)
+  visorTan:     number; // tan(visorAngle) — barn-door cutoff in fixture-local V-plane
+  visorPenumbra: number; // soft-edge fraction of the visor cutoff [0–1]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,19 +319,24 @@ export class LightRig {
         45,
       );
       const dynamicHalfAngle = THREE.MathUtils.degToRad(dynamicBeamDeg / 2);
-      
+
+      // ── Elliptical beam: vertical half-angle ────────────────────────────────
+      // angleV = angleH × hVRatio.
+      // hVRatio=1.0 → circular beam (no vertical compression).
+      // hVRatio<1.0 → elliptical TIR lens (V narrower than H).
+      const angleV = dynamicHalfAngle * params.hVRatio;
+
+      // ── Visor (barn-door) cutoff ────────────────────────────────────────────
+      // Computes tan(cutoff angle) from the far-touchline geometry.
+      // Returns 1e9 when the far touchline is outside the beam cone (no visor needed).
+      const visorTan = computeVisorTan(lx, ly, lz, aim, params.visorMarginDeg, dynamicHalfAngle);
+
       // Recompute intensity.
-      // We don't want a pure 1/solidAngle scale, because it overcompensates and
-      // burns out the centre. We blend between constant-intensity and constant-flux.
       const refSolidAngle = 2 * Math.PI * (1 - Math.cos(THREE.MathUtils.degToRad(params.beamAngleDeg / 2)));
       const dynamicSolidAngle = 2 * Math.PI * (1 - Math.cos(dynamicHalfAngle));
       
-      // base intensity = Flux / RefSolidAngle
       const baseIntensity = phys.fluxPerGroup * params.beamEfficiency / refSolidAngle;
-      // perfect conservation = Flux / DynamicSolidAngle
       const conservedIntensity = phys.fluxPerGroup * params.beamEfficiency / dynamicSolidAngle;
-      
-      // Interpolate: 0.6 favors constant spot size over constant lux
       const dynamicIntensity = THREE.MathUtils.lerp(baseIntensity, conservedIntensity, 0.6);
 
       const spot = new THREE.SpotLight(
@@ -341,6 +349,7 @@ export class LightRig {
         index: idx, groupSize: phys.groupSize,
         fluxPerGroup: phys.fluxPerGroup, intensityCd: dynamicIntensity,
         solidAngle: dynamicSolidAngle, aimTarget: aim.clone(),
+        angleV, visorTan, visorPenumbra: params.visorPenumbra,
       } satisfies SpotMeta;
       this.group.add(spot);
       this.group.add(spot.target);
@@ -358,4 +367,60 @@ export class LightRig {
     placeSpots(southSpots, southTargets);
 
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visor (barn-door) cutoff computation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Computes tan(visorAngle) for a fixture in its local vertical plane.
+ *
+ * The visor blocks rays where  dy_local / dz_local > visorTan.
+ *
+ * Key invariant: the visor is only meaningful when the far touchline is
+ * INSIDE the beam cone (baseTan < tan(angleH)).  If the touchline is already
+ * outside the cone, no light reaches the far stands from this fixture and
+ * 1e9 is returned, disabling both the shader cutoff and the debug plate.
+ *
+ * @param angleH  beam horizontal half-angle [rad]
+ * @returns 1e9 when no visor is needed for this fixture.
+ */
+export function computeVisorTan(
+  lx: number, ly: number, lz: number,
+  aim: THREE.Vector3,
+  visorMarginDeg: number,
+  angleH: number,
+): number {
+  const ax = aim.x - lx, ay = aim.y - ly, az = aim.z - lz;
+  const al = Math.sqrt(ax*ax + ay*ay + az*az);
+  if (al < 1e-6) return 1e9;
+  const axN = ax/al, ayN = ay/al, azN = az/al;
+
+  let rx = -azN, rz = axN;
+  const rl = Math.sqrt(rx*rx + rz*rz);
+  if (rl < 1e-6) { rx = 1; rz = 0; } else { rx /= rl; rz /= rl; }
+
+  const ux = -rz * ayN;
+  const uy =  rz * axN - rx * azN;
+  const uz =  rx * ayN;
+
+  const farTZ = lz < 0 ? FIELD_H / 2 : -FIELD_H / 2;
+  const dx = 0, dy = -ly, dz = farTZ - lz;
+  const dl = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  if (dl < 1e-6) return 1e9;
+  const dxN = dx/dl, dyN = dy/dl, dzN = dz/dl;
+
+  const dLocalY = dxN*ux + dyN*uy + dzN*uz;
+  const dLocalZ = dxN*axN + dyN*ayN + dzN*azN;
+
+  if (dLocalZ <= 0) return 1e9;
+
+  const baseTan = dLocalY / dLocalZ;
+
+  // Far touchline is already outside the beam cone — this fixture cannot
+  // illuminate the far stands, so no visor is needed.
+  if (baseTan >= Math.tan(angleH)) return 1e9;
+
+  return baseTan + Math.tan(THREE.MathUtils.degToRad(visorMarginDeg));
 }

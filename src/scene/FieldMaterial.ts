@@ -6,28 +6,18 @@ import fieldFragGlsl from '../shaders/field.frag.glsl';
 /**
  * Custom ShaderMaterial for the pitch surface.
  *
- * Light data is stored in a float DataTexture instead of uniform arrays.
+ * Texture layout (width = MAX_LIGHTS, height = 4, RGBA float):
+ *   row 0:  pixel i → (pos.x,     pos.y,    pos.z,    0)
+ *   row 1:  pixel i → (target.x,  target.y, target.z, 0)
+ *   row 2:  pixel i → (intensity, angleH,   penumbra, angleV)
+ *   row 3:  pixel i → (visorTan,  0,        0,        0)
  *
- * Why DataTexture:
- *   Uniform arrays (vec3/vec4[N]) each consume 1 vec4 from the fragment uniform
- *   budget.  WebGL2 minimum MAX_FRAGMENT_UNIFORM_VECTORS = 224.  With 3 arrays
- *   for positions/targets/params, the break-even is 3 × N vec4s:
- *     N = 64  → 192 vec4s  (just within minimum)
- *     N = 80  → 240 vec4s  (exceeds minimum on some GPUs)
- *   A DataTexture uses only 1 sampler unit regardless of N, with no uniform
- *   budget impact.  MAX_LIGHTS can be set to 128 or higher safely.
+ * angleH / angleV: horizontal / vertical beam half-angles [rad] (elliptic TIR lens).
+ * visorTan: tan(visorAngle) — barn-door cutoff per fixture, auto-computed from
+ *   the far touchline geometry in LightRig.ts.
  *
- * Texture layout (width = MAX_LIGHTS, height = 3, RGBA float):
- *   row 0:  pixel i → (pos.x,       pos.y,    pos.z,    0)
- *   row 1:  pixel i → (target.x,    target.y, target.z, 0)
- *   row 2:  pixel i → (intensity,   angle,    penumbra, 0)
- *
- * MAX_LIGHTS must match #define MAX_LIGHTS in field.frag.glsl.
- *
- * Shared uniforms:
- *   All materials created via createMaterial() share the same uniform objects
- *   so a single update() call propagates light data to every surface (field,
- *   stands, etc.) automatically.
+ * All materials created via createMaterial() share the same uniform objects
+ * so a single update() call propagates to every surface (field, stands, etc.).
  */
 export class FieldMaterial {
   static readonly MAX_LIGHTS = MAX_SHADER_LIGHTS;
@@ -35,18 +25,17 @@ export class FieldMaterial {
   readonly material: THREE.ShaderMaterial;
   private readonly texData: Float32Array;
   private readonly texture: THREE.DataTexture;
-  // Shared uniform objects — referenced by all derived materials.
   private readonly uniforms: Record<string, THREE.IUniform>;
 
   constructor() {
     const ML = FieldMaterial.MAX_LIGHTS;
 
-    // Texture: width=ML, height=3, RGBA float → ML × 3 × 4 floats total.
-    this.texData = new Float32Array(ML * 3 * 4);
+    // width = ML lights, height = 4 data rows, RGBA float.
+    this.texData = new Float32Array(ML * 4 * 4);
     this.texture = new THREE.DataTexture(
       this.texData,
       ML,
-      3,
+      4,
       THREE.RGBAFormat,
       THREE.FloatType,
     );
@@ -56,17 +45,11 @@ export class FieldMaterial {
 
     const grassLinear = new THREE.Color(0x2d7a2d).convertSRGBToLinear();
 
-    // Build the shared uniform objects once.  Any material created via
-    // createMaterial() references these same objects so a single update()
-    // propagates to ALL surfaces simultaneously.
     this.uniforms = {
       lightData:    { value: this.texture },
       lightCount:   { value: 0 },
       iesExponent:  { value: 3.0 },
-      beamAsymmetry:{ value: 0.6 },
-      // Luminance-normalised CCT tint (Y = 1.0); set in update().
       lightColor:   { value: new THREE.Color(1, 1, 1) },
-      // 0 = surface colour, 1 = 18% neutral grey (lighting-only debug view).
       lightingOnly: { value: 0.0 },
     };
 
@@ -74,12 +57,8 @@ export class FieldMaterial {
   }
 
   /**
-   * Returns a new ShaderMaterial that shares all light uniforms with this
-   * FieldMaterial instance.  Only `baseColor` is per-material.
-   *
-   * Because JavaScript spreads uniform objects by reference, writing to
-   * `this.uniforms['lightCount'].value` in update() will immediately be
-   * visible in every material produced here — no extra update call needed.
+   * Returns a new ShaderMaterial sharing all light uniforms via reference.
+   * Only baseColor is per-surface.
    */
   createMaterial(baseColor: THREE.Color): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
@@ -88,8 +67,6 @@ export class FieldMaterial {
       fragmentShader: fieldFragGlsl,
       uniforms: {
         ...this.uniforms,
-        // Each surface gets its own baseColor uniform object so they can
-        // differ (grass green vs. stand concrete grey).
         baseColor: { value: baseColor.clone() },
       },
       polygonOffset:       true,
@@ -99,24 +76,24 @@ export class FieldMaterial {
   }
 
   /**
-   * Uploads SpotLight state to the DataTexture and updates shared uniforms.
-   *
-   * Unused slots (i >= lights.length) are explicitly cleared (intensity = 0)
-   * to prevent stale data from a previous higher-count call.
+   * Uploads SpotLight state to the DataTexture.  Reads angleV and visorTan
+   * from SpotLight.userData['meta'] (set by LightRig).  Clears unused slots.
    */
-  update(lights: readonly THREE.SpotLight[], iesExp: number, beamAsymmetry: number): void {
+  update(lights: readonly THREE.SpotLight[], iesExp: number): void {
     const ML  = FieldMaterial.MAX_LIGHTS;
     const buf = this.texData;
 
-    // Row base offsets in the flat Float32Array (4 components per texel).
-    const ROW_POS = 0;        // row 0: positions
-    const ROW_TGT = ML;       // row 1: targets
-    const ROW_PAR = 2 * ML;   // row 2: params
+    // Row base offsets (4 components per texel, width = ML).
+    const ROW_POS = 0;          // row 0: positions
+    const ROW_TGT = ML;         // row 1: targets
+    const ROW_PAR = 2 * ML;     // row 2: intensity, angleH, penumbra, angleV
+    const ROW_EXT = 3 * ML;     // row 3: visorTan
 
     const n = Math.min(lights.length, ML);
 
     for (let i = 0; i < n; i++) {
-      const l = lights[i];
+      const l    = lights[i];
+      const meta = l.userData['meta'] as { angleV?: number; visorTan?: number; visorPenumbra?: number } | undefined;
 
       buf[(ROW_POS + i) * 4]     = l.position.x;
       buf[(ROW_POS + i) * 4 + 1] = l.position.y;
@@ -126,17 +103,23 @@ export class FieldMaterial {
       buf[(ROW_TGT + i) * 4 + 1] = l.target.position.y;
       buf[(ROW_TGT + i) * 4 + 2] = l.target.position.z;
 
+      // SpotLight.angle = horizontal half-angle (angleH).
       buf[(ROW_PAR + i) * 4]     = l.intensity;
-      buf[(ROW_PAR + i) * 4 + 1] = l.angle;
+      buf[(ROW_PAR + i) * 4 + 1] = l.angle;                    // angleH [rad]
       buf[(ROW_PAR + i) * 4 + 2] = l.penumbra;
+      buf[(ROW_PAR + i) * 4 + 3] = meta?.angleV ?? l.angle;   // angleV [rad]
+
+      // visorTan: large value = effectively no cutoff.
+      buf[(ROW_EXT + i) * 4]     = meta?.visorTan     ?? 1e9;
+      buf[(ROW_EXT + i) * 4 + 1] = meta?.visorPenumbra ?? 0.0;
     }
 
     for (let i = n; i < ML; i++) {
-      buf[(ROW_PAR + i) * 4] = 0;
+      buf[(ROW_PAR + i) * 4] = 0; // clear intensity → shader skips slot
     }
 
-    // CCT colour normalised to luminance Y = 1.0 (chromaticity-only shift).
-    //   Y = 0.2126 R + 0.7152 G + 0.0722 B   (CIE 1931)
+    // CCT colour normalised to luminance Y = 1.0.
+    //   Y = 0.2126 R + 0.7152 G + 0.0722 B   (CIE 1931 luminance coefficients)
     if (n > 0) {
       const c   = lights[0].color;
       const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
@@ -147,12 +130,10 @@ export class FieldMaterial {
     }
 
     this.texture.needsUpdate = true;
-    this.uniforms['lightCount'].value   = n;
-    this.uniforms['iesExponent'].value  = iesExp;
-    this.uniforms['beamAsymmetry'].value = beamAsymmetry;
+    this.uniforms['lightCount'].value  = n;
+    this.uniforms['iesExponent'].value = iesExp;
   }
 
-  /** Toggle lighting-only (18% grey) debug view without a full rebuild. */
   setLightingOnly(enabled: boolean): void {
     this.uniforms['lightingOnly'].value = enabled ? 1.0 : 0.0;
   }

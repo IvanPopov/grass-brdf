@@ -37,11 +37,25 @@ export const DEFAULT_PARAMS = {
   // to overlap smoothly — otherwise hard-edged patches are clearly visible.
   penumbra:          0.30,    // soft-edge fraction of cone      [0–1]  (effective range 0.20–0.40)
 
-  // Asymmetric beam optics — simulates asymmetric TIR lenses or physical barn-door
-  // visors that real stadium fixtures use to prevent spill light onto stands.
-  // 0.0 = perfectly circular cone (large spill far into stands)
-  // 1.0 = heavily compressed elliptical beam (minimal stand spill)
-  beamAsymmetry:     0.60,    // vertical beam compression factor [0–1]
+  // ── Asymmetric beam optics — physically correct elliptical cone + visor ──────
+  // Real stadium fixtures use asymmetric TIR lenses that produce an elliptical
+  // beam: wider horizontally (H, along the touchline) to blend with neighbours,
+  // narrower vertically (V, in the field-depth plane) to reduce stand spill.
+  // Typical measured values from manufacturer IES files:
+  //   Philips ArenaVision MVF403: H=35°, V=19°   → hVRatio ≈ 0.54
+  //   Musco TLC-LED:              H=40°, V=20°   → hVRatio ≈ 0.50
+  //
+  // Default hVRatio=1.0 → circular beam (no vertical compression).
+  hVRatio:           1.00,    // V/H beam ratio [0.2–1.0]  (1.0 = circular, no asymmetry)
+
+  // Visor / barn-door cutoff margin.
+  // Auto-computed per fixture: the visor clips rays aimed past the far touchline.
+  // visorMarginDeg is added above that angle to allow some stand illumination.
+  //   0°  = hard cutoff at field boundary
+  //   5°  = ~3–5 lower rows lit (typical real stadium)
+  //   89° = effectively disabled — tan(89°)≈57, never clips on any real geometry
+  visorMarginDeg:    5.0,    // extra degrees above touchline for visor [deg]
+  visorPenumbra:     0.30,    // soft-edge fraction of visor cutoff [0–1] (0 = hard, 1 = full fade)
 
   // ── Beam efficiency ───────────────────────────────────────────────────
   // The rated luminous flux (fluxPerFixture) is the TOTAL output of the LED

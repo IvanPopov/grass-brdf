@@ -83,6 +83,8 @@ const { gui, updateComputedDisplay } = buildGui(params, rebuild);
 const debugFolder = gui.addFolder('Debug');
 debugFolder.add(lightRigVisual, 'showCones').name('Cone wireframes')
   .onChange(() => lightRigVisual.build(lightRig.lights, params));
+debugFolder.add(lightRigVisual, 'showLabels').name('Fixture labels')
+  .onChange(() => lightRigVisual.build(lightRig.lights, params));
 debugFolder.add(debug, 'showAimTargets').name('Aim targets (orange)')
   .onChange(() => debug.rebuild(lightRig.lights));
 debugFolder.add(debug, 'showHeatmap').name('E_h heatmap (discs)')
@@ -129,7 +131,7 @@ function rebuild(): void {
   lightRig.build(params);
   lightRigVisual.build(lightRig.lights, params);
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
-  fieldMat.update(lightRig.lights, params.iesExponent, params.beamAsymmetry);
+  fieldMat.update(lightRig.lights, params.iesExponent);
   debug.iesExponent = params.iesExponent;
   debug.rebuild(lightRig.lights);
   debug.logReport(lightRig.lights);

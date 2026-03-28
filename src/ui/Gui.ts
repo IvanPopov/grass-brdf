@@ -128,6 +128,36 @@ export function buildGui(params: LightRigParams, onChange: () => void): GuiHandl
     'Higher values help overlap adjacent grouped beams more smoothly.',
   );
 
+  tip(
+    fix.add(params, 'hVRatio', 0.2, 1.0, 0.05)
+      .name('V/H angle ratio')
+      .onChange(onChange),
+    'Vertical-to-horizontal beam half-angle ratio (TIR asymmetric lens).\n' +
+    '1.0 = circular beam (no asymmetry, default).\n' +
+    '0.5 = V half-angle is 50% of H — typical LED stadium fixture.\n' +
+    'Philips ArenaVision MVF403: ~0.54.  Musco TLC-LED: ~0.50.',
+  );
+
+  tip(
+    fix.add(params, 'visorMarginDeg', 0, 89, 0.5)
+      .name('Visor margin [deg]')
+      .onChange(onChange),
+    'Extra degrees above the far touchline the barn-door visor allows through.\n' +
+    '89 = disabled (tan(89)>>1, never clips) — default safe value.\n' +
+    ' 0 = hard cutoff at field boundary (no stand spill at all).\n' +
+    ' 5 = ~3-5 lower rows lit (typical UEFA/FIFA Class V rig).',
+  );
+
+  tip(
+    fix.add(params, 'visorPenumbra', 0, 1, 0.05)
+      .name('Visor penumbra')
+      .onChange(onChange),
+    'Soft-edge width of the visor cutoff as a fraction of the cutoff angle.\n' +
+    '0.0 = hard step (unphysical).\n' +
+    '0.3 = fade starts at 70% of cutoff angle — matches real barn-door penumbra.\n' +
+    '1.0 = fade spans the full range from beam axis to cutoff.',
+  );
+
   // ── Physical / colorimetric ───────────────────────────────────────────────
   const phys = gui.addFolder('Physical');
   tip(
