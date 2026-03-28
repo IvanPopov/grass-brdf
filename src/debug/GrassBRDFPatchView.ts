@@ -312,30 +312,36 @@ export class GrassBRDFPatchView {
 
     const rp = new RenderPass(this.scene, this.camera, null, new THREE.Color(0x000000), 0);
 
-    // GTAO: screen-space radius, distanceExponent in ~1-2 (three.js docs), softer falloff, blendIntensity < 1.
+    // Jimenez et al., "Practical Real-Time Strategies for Accurate Indirect Occlusion"
+    // (Activision ATVI-TR-16-01). Numeric defaults below follow Intel XeGTAO reference
+    // (github.com/GameTechDev/XeGTAO, XeGTAO.h) which implements that report.
+    // three.js GTAOPass maps: radius (world/view), distanceExponent (sample distribution),
+    // distanceFallOff (falloff range), scale (final occlusion pow), thickness (view-space Z test).
+    const JIMENEZ_EFFECT_RADIUS = 0.5;
+    const JIMENEZ_RADIUS_MULTIPLIER = 1.457;
     const aoParams = {
-      radius:            0.34,
-      distanceExponent:  1.35,
-      thickness:         1.35,
-      distanceFallOff:   0.88,
-      scale:               1,
-      samples:             24,
-      screenSpaceRadius:   true,
+      radius:            JIMENEZ_EFFECT_RADIUS * JIMENEZ_RADIUS_MULTIPLIER,
+      distanceExponent:  2.0,
+      thickness:         1.0,
+      distanceFallOff:   0.615,
+      scale:             2.2,
+      samples:           16,
+      screenSpaceRadius: false,
     };
     const pdParams = {
-      lumaPhi:   12,
+      lumaPhi:   10,
       depthPhi:  2,
       normalPhi: 3,
       radius:    8,
       rings:     2,
-      samples:   20,
+      samples:   16,
     };
 
     const gp = new GTAOPass(this.scene, this.camera, vp, vp);
     gp.updateGtaoMaterial(aoParams);
     gp.updatePdMaterial(pdParams);
     gp.output = GTAOPass.OUTPUT.Default;
-    gp.blendIntensity = 0.72;
+    gp.blendIntensity = 0.55;
 
     const outPass = new PatchTonemapPass();
 
