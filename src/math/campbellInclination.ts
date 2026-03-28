@@ -9,10 +9,15 @@
  *
  * For the ellipsoidal distribution, the (un-normalised) PDF of the zenith angle θ
  * of the LEAF NORMAL measured from vertical (0 = normal up, pi/2 = horizontal) is
- * proportional to the area element on the associated ellipsoid:
- *     p_unnorm(theta) = sin(theta) / ( (chi*cos(theta))^2 + sin(theta)^2 )^(3/2)
- * At chi = 1 this reduces to sin(theta), i.e. uniform over the upper hemisphere of
- * normals (isotropic azimuth times classic cos-weighting on zenith).
+ * derived from the area element on the oblate/prolate spheroid with horizontal
+ * semiaxis chi and vertical semiaxis 1:
+ *
+ *     p_unnorm(theta) = sin(theta) / ( cos(theta)^2 + (chi*sin(theta))^2 )^(3/2)
+ *
+ * chi direction (consistent with G_beam and [Camp90]):
+ *   chi > 1  — planophile: leaves mostly horizontal, normals near θ=0  (clover, lotus)
+ *   chi = 1  — spherical:  reduces to sin(theta), uniform over hemisphere
+ *   chi < 1  — erectophile: leaves mostly vertical, normals near θ=pi/2 (grass, cereal)
  *
  * References:
  *   [Camp90] Campbell G.S. (1990) Agric. For. Meteorol. 49, 173–176.
@@ -52,11 +57,16 @@ export function campbellG(cosTheta: number, chi: number, M: number): number {
 /**
  * Un-normalised PDF of leaf-normal zenith θ from vertical [0, pi/2] for ellipsoidal LAD.
  * Not the same function as G_beam in the shader.
+ *
+ * chi > 1 → planophile: peak near θ=0 (normals up, leaves horizontal).
+ * chi = 1 → spherical: p = sin(theta).
+ * chi < 1 → erectophile: peak near θ=pi/2 (normals sideways, leaves vertical).
  */
 export function leafNormalZenithUnnorm(theta: number, chi: number): number {
   const c = Math.cos(theta);
   const s = Math.sin(theta);
-  const d = chi * chi * c * c + s * s;
+  const chiS = chi * s;
+  const d = c * c + chiS * chiS;
   return s / Math.pow(Math.max(d, 1e-18), 1.5);
 }
 
