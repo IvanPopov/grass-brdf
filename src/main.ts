@@ -12,6 +12,7 @@ import { Stands } from './scene/Stands';
 import { buildGui } from './ui/Gui';
 import { IlluminanceDebug } from './debug/IlluminanceDebug';
 import { DEFAULT_GRASS_BRDF, DEFAULT_GRASS_DEBUG, GrassBRDFDebug, GrassBRDFParams } from './scene/GrassBRDFParams';
+import { GrassBRDFPatchView } from './debug/GrassBRDFPatchView';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 // Shallow copy so GUI mutations do not modify the original defaults.
@@ -23,11 +24,16 @@ const grassParams: GrassBRDFParams = { ...DEFAULT_GRASS_BRDF };
 // Per-component debug toggles — mutable object shared with GUI.
 const grassDebug: GrassBRDFDebug = { ...DEFAULT_GRASS_DEBUG };
 
+const grassPatchView = new GrassBRDFPatchView();
+grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
+
 // ── WebGL renderer ────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = false;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ACES Filmic tonemapping compresses the high-luminance scene values
 // (hundreds of linear units from physical candela SpotLights) into the
@@ -87,6 +93,7 @@ debug.init(scene);
 // ── GUI ───────────────────────────────────────────────────────────────────────
 function onGrassChange(): void {
   fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+  grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }
 
 const { gui, updateComputedDisplay } = buildGui(params, rebuild, grassParams, grassDebug, onGrassChange);
@@ -137,6 +144,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   labelRenderer.setSize(window.innerWidth, window.innerHeight);
+  grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
 });
 
 // ── Rebuild ───────────────────────────────────────────────────────────────────
@@ -158,6 +166,8 @@ function rebuild(): void {
 
   const phys = computeGroupPhysics(params);
   updateComputedDisplay(phys, params);
+
+  grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }
 
 rebuild();
@@ -170,9 +180,18 @@ function animate(): void {
   // Update camera position in the BRDF shader every frame so the view-direction
   // dependent shading (specular, hot-spot) responds to camera movement.
   fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+  grassPatchView.updateStadiumLighting(lightRig.lights, params.iesExponent, grassParams, params.colorTempK);
+  grassPatchView.syncCameraToMain(camera);
 
+  const toneMapping = renderer.toneMapping;
+  const toneMappingExposure = renderer.toneMappingExposure;
+
+  renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+  renderer.setScissorTest(false);
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
+
+  grassPatchView.render(renderer, toneMapping, toneMappingExposure);
 }
 
 animate();
