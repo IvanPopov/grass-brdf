@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MAX_SHADER_LIGHTS } from '../config';
+import { FIELD_H, FIELD_W, MAX_SHADER_LIGHTS } from '../config';
 import { GrassBRDFParams, GrassBRDFDebug } from './GrassBRDFParams';
 import { estimateMeanZenithRad } from '../math/campbellInclination';
 import fieldVertGlsl from '../shaders/field.vert.glsl';
@@ -23,6 +23,15 @@ import fieldFragGlsl from '../shaders/field.frag.glsl';
  */
 export class FieldMaterial {
   static readonly MAX_LIGHTS = MAX_SHADER_LIGHTS;
+
+  private static makePlaceholderCrushMap(): THREE.DataTexture {
+    const d = new Uint8Array([255, 255, 255, 255]);
+    const t = new THREE.DataTexture(d, 1, 1, THREE.RGBAFormat);
+    t.needsUpdate = true;
+    t.flipY = false;
+    t.colorSpace = THREE.NoColorSpace;
+    return t;
+  }
 
   readonly material: THREE.ShaderMaterial;
   private readonly texData: Float32Array;
@@ -69,10 +78,11 @@ export class FieldMaterial {
       chiLAD:       { value: 0.5 },
       bladeRL:      { value: 0.004 / 0.027 }, // bladeWidthM / bladeHeightM
 
-      // Blade face tilt for mowing stripe specular (toward +X, angle from vertical)
-      bladeTiltRad: { value: 70.0 * Math.PI / 180.0 },
       bladeCampbellMeanTiltRad: { value: 0.7 },
-      bladeDirectionalWeight: { value: 0.0 },
+
+      crushMap:   { value: FieldMaterial.makePlaceholderCrushMap() },
+      fieldSize:   { value: new THREE.Vector2(FIELD_W, FIELD_H) },
+      mowMaxTiltRad: { value: 70.0 * Math.PI / 180.0 },
 
       // Leaf optical properties (linear sRGB)
       bladeAlbedo: { value: new THREE.Vector3(0.045, 0.115, 0.025) },
@@ -84,16 +94,15 @@ export class FieldMaterial {
       alphaT:         { value: 0.15 },
       alphaB:         { value: 0.60 },
 
-      // Mowing stripe width [m].
-      mowingStripeWidth: { value: 5.4 },
-      mowingStripesEnabled: { value: 1.0 },
-      meadowGridScale: { value: 50.0 },
-
       dbgHotSpot: { value: 1.0 },
       dbgMS:      { value: 1.0 },
     };
 
     this.material = this.createMaterial(grassLinear);
+  }
+
+  setCrushMapTexture(tex: THREE.Texture): void {
+    this.uniforms['crushMap'].value = tex;
   }
 
   /**
@@ -191,14 +200,14 @@ export class FieldMaterial {
     u['lai'].value              = p.lai;
     u['chiLAD'].value           = p.chiLAD;
     u['bladeRL'].value          = p.bladeWidthM / p.bladeHeightM;
-    u['bladeTiltRad'].value     = p.bladeTiltDeg * Math.PI / 180.0;
 
     if (p.chiLAD !== this.cachedChiLAD) {
       this.cachedMeanZenithRad = estimateMeanZenithRad(p.chiLAD);
       this.cachedChiLAD        = p.chiLAD;
     }
     u['bladeCampbellMeanTiltRad'].value = this.cachedMeanZenithRad;
-    u['bladeDirectionalWeight'].value   = THREE.MathUtils.clamp(p.bladeDirectionalWeight, 0.0, 1.0);
+    u['mowMaxTiltRad'].value            = p.mowMaxTiltDeg * Math.PI / 180.0;
+    (u['fieldSize'].value as THREE.Vector2).set(FIELD_W, FIELD_H);
 
     const ba = u['bladeAlbedo'].value as THREE.Vector3;
     ba.set(p.bladeAlbedoR, p.bladeAlbedoG, p.bladeAlbedoB);
@@ -212,8 +221,6 @@ export class FieldMaterial {
     u['bladeCuticleF0'].value    = p.bladeCuticleF0;
     u['alphaT'].value            = p.alphaT;
     u['alphaB'].value            = p.alphaB;
-    u['mowingStripeWidth'].value     = p.mowingStripeWidth;
-    u['mowingStripesEnabled'].value  = p.mowingStripesEnabled ? 1.0 : 0.0;
 
     u['dbgHotSpot'].value = dbg.dbgHotSpot ? 1.0 : 0.0;
     u['dbgMS'].value      = dbg.dbgMS      ? 1.0 : 0.0;

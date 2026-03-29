@@ -31,15 +31,17 @@ uniform float isSurfaceGrass;
 // ── Canopy structure ──────────────────────────────────────────────────────────
 // lai: Leaf Area Index [m²/m²].  chiLAD: Campbell ellipsoidal LAD parameter.
 // bladeRL: rL = bladeWidth / bladeHeight (hot-spot angular scale).
-// bladeTiltRad: blade face tilt from vertical toward +X [rad] (mowing lean).
 // bladeCampbellMeanTiltRad: mean zenith [rad] from Campbell LAD (meadow specular).
-// bladeDirectionalWeight: 0 = isotropic meadow normals, 1 = mowed/stadium normals.
 uniform float lai;
 uniform float chiLAD;
 uniform float bladeRL;
-uniform float bladeTiltRad;
 uniform float bladeCampbellMeanTiltRad;
-uniform float bladeDirectionalWeight;
+
+// Crush map (procedural RTT): R = blend w, G = coherence, B = spread, A = (leanSign+1)/2
+// fieldSize: (FIELD_W, FIELD_H) [m].  mowMaxTiltRad: max face zenith from vertical [rad].
+uniform sampler2D crushMap;
+uniform vec2      fieldSize;
+uniform float     mowMaxTiltRad;
 
 // ── Leaf optical properties [linear sRGB, 0–1] ───────────────────────────────
 // bladeAlbedo: per-leaf reflectance ρ_leaf.
@@ -56,10 +58,6 @@ uniform vec3 soilAlbedo;
 uniform float bladeCuticleF0;
 uniform float alphaT;
 uniform float alphaB;
-
-// ── Mowing stripe ────────────────────────────────────────────────────────────
-uniform float mowingStripeWidth;
-uniform float mowingStripesEnabled;
 
 // ── Debug flags (1.0 = enabled, 0.0 = disabled) ──────────────────────────────
 //   dbgHotSpot — retroreflection enhancement; 0 → Chs clamped to 1 (Chen 1997)
@@ -315,33 +313,6 @@ float fresnelSchlick(float cosTheta, float F0) {
 // SECTION 5 — BRDF EVALUATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Transverse mowing: mower travels across the pitch in the Z direction.
-// Stripes run parallel to the goal lines (in Z direction), indexed by X.
-// Adjacent stripes (different X bands) lean in opposite Z directions, giving
-// the alternating lighter/darker appearance seen on broadcast TV.
-//
-// N_blade = (0, cos(tiltRad), leanSign × sin(tiltRad))
-// For tiltRad = 70°: N_blade = (0, 0.342, ±0.940)
-//
-// Key properties:
-//   bNdotV from directly overhead (V=(0,1,0)):
-//     = cos(tiltRad) ≈ 0.342 for BOTH stripe types → equal, no stripe contrast.
-//     This is physically correct: stripe pattern is invisible from above.
-//   bNdotV from oblique Z view (goal-end or broadcast camera):
-//     one set of stripes has higher bNdotV → visible stripe contrast. ✓
-//   bNdotV is independent of V.x → no "curtain" asymmetry when rotating
-//     from one touchline camera to the opposite. ✓
-//
-// Stripe boundary at X=0 (field centre line): stripe −1 meets stripe 0 with
-// opposite lean → maximum contrast at centre. Layout is symmetric.
-
-vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
-    float stripeIdx = floor(worldX / mowingStripeWidth);
-    float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
-    float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
-    return vec3(0.0, cos(tiltRad), leanSign * sin(tiltRad));
-}
-
 // Evaluate the full physical OBC grass BRDF for one light source.
 //
 // Returns the outgoing radiance contribution [cd/m²] from this light,
@@ -532,8 +503,8 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
         //     = (0, −leanSign·sin θ, cos θ)                   [verified analytically]
         //   B = cross(N_blade, T) = (1, 0, 0)                 [exact, both lean signs]
         //
-        // alphaT (0.15, sharp) along T ≈ Z → streak follows mowing direction. ✓
-        // alphaB (0.60, broad) along B = X → wide lobe along the pitch length. ✓
+        // alphaT (0.15, sharp) along T ≈ Z: streak follows mowing direction.
+        // alphaB (0.60, broad) along B = X: wide lobe along the pitch length.
         vec3 mowDir = vec3(0.0, 0.0, 1.0);
         vec3 T = normalize(mowDir - N_blade * dot(N_blade, mowDir));
         vec3 B = cross(N_blade, T);
@@ -607,53 +578,22 @@ void main() {
         // Campbell M coefficient: constant for this fragment (only depends on chi).
         float M = campbellM(chiLAD);
 
-        // Generate baseline blade normal
-        // The effective tilt is the mowed tilt scaled by the directional weight.
-        // This exactly matches the spherical interpolation (slerp) used in the patch.
-        // Mowing tilt from normal: 0 tilt means vertical (Y=1), pi/2 means horizontal (Z=1).
-        // For the BRDF, bladeTiltRad is the angle of the face normal from the vertical (Y axis).
-        // If Blade Tilt = 89 deg (~pi/2), the normal is almost horizontal (0, 0, 1), which means
-        // the physical grass blade is standing VERTICAL.
-        // If Blade Tilt = 30 deg, the normal is (0, cos(30), sin(30)), meaning the blade
-        // is lying down close to the ground (tilted 60 degrees from vertical).
-        
-        // The effective tilt angle ranges from 0 (vertical grass) to bladeTiltRad.
-        // On the patch, Mowed normals lean entirely in the Z direction (or -Z).
-        // Since we removed noise, the analytical mean meadow normal is strictly vertical (Y=1).
-        // A pure meadow grass is vertical, so its face normal is perfectly horizontal.
-        // Wait, if grass is vertical, its face normal points horizontally (Y=0).
-        // The *average* face normal of a ring of vertical grass blades is (0, 0, 0)!
-        // If we use (0, 1, 0) for the meadow normal, we are treating the meadow like a FLAT FLOOR.
-        // This causes the extreme bright specular highlight pointing straight up.
-        
-        float stripeIdx = floor(vWorldPos.x / mowingStripeWidth);
-        float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
-        float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
-        
-        float w = clamp(bladeDirectionalWeight, 0.0, 1.0);
-        
-        // To match the patch perfectly, the macroscopic normal must preserve the correct zenith tilt.
-        // Meadow has a mean tilt from Campbell LAD. Mowed has a fixed blade tilt.
+        vec2 mapUv = vec2(vWorldPos.x / fieldSize.x + 0.5, vWorldPos.z / fieldSize.y + 0.5);
+        vec4 m = texture(crushMap, mapUv);
+        float w_map = clamp(m.r, 0.0, 1.0);
+        float coherence = clamp(m.g, 0.0, 1.0);
+        float spread_map = clamp(m.b, 0.0, 1.0);
+        float leanSign = m.a * 2.0 - 1.0;
+
         float meadowTilt = bladeCampbellMeanTiltRad;
-        float effectiveTilt = mix(meadowTilt, bladeTiltRad, w);
-        
-        // At w=0, the meadow is perfectly isotropic. A macroscopic surface of isotropic 
-        // vertical grass has a perfectly symmetric specular lobe, pointing straight up.
-        // We use an epsilon on Y to guarantee (0, 1, 0) normal when w=0 to preserve symmetry,
-        // instead of picking an arbitrary azimuth (like +X) which causes one-sided bright streaks.
-        // As w > 0, the grass twists towards Z, instantly becoming highly anisotropic.
+        float effectiveTilt = mix(meadowTilt, mowMaxTiltRad, w_map);
         float yComp = cos(effectiveTilt);
-        float zComp = leanSign * sin(effectiveTilt) * w;
-        
+        float zComp = leanSign * sin(effectiveTilt) * w_map;
         vec3 N_blade = normalize(vec3(0.0, yComp + 0.0001, zComp));
 
-        // Compute the geometric variance lost by using a macroscopic average normal.
-        // For pure meadow (w=0), normals are spread in a ring with tilt theta. 
-        // A simple variance proxy is sin(theta)^2.
-        // For pure mowed (w=1), all normals face the exact same way, so variance is 0.
         float sinTheta = sin(bladeCampbellMeanTiltRad);
-        float meadowVariance = sinTheta * sinTheta * 0.5; // Tuning factor
-        float variance = mix(meadowVariance, 0.0, w);
+        float meadowVariance = sinTheta * sinTheta * 0.5;
+        float variance = mix(meadowVariance, spread_map, w_map);
 
         for (int i = 0; i < MAX_LIGHTS; i++) {
             if (i >= lightCount) break;
@@ -664,10 +604,7 @@ void main() {
             float E_raw = lightRawIrradiance(ld, vWorldPos, n, L);
             if (E_raw <= 0.0) continue;
 
-            // Compute purely analytical macro BRDF (no stochastics).
-            // We pass the computed variance and directional weight to fully trigger 
-            // the Toksvig high-roughness energy conservation, modelling the specular blur.
-            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, variance, w) * lightColor;
+            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, variance, coherence) * lightColor;
         }
 
     } else {

@@ -282,7 +282,7 @@ export function buildGui(
     '    - Soil visible through canopy gaps (gap fraction model)\n' +
     '    - Multiple scattering (two-stream approx., Sellers 1985)\n' +
     '    - Anisotropic GGX specular on blade face (Burley 2012)\n' +
-    '    - Mowing stripe pattern from alternating blade tilt',
+    '    - Crush map from procedural RGBA RTT (field) + top-left panel',
   );
 
   const canopy = grass.addFolder('Canopy structure');
@@ -306,7 +306,7 @@ export function buildGui(
     '  χ = 1: spherical inclination distribution\n' +
     '  χ > 1: planophile (more horizontal laminae) — e.g. many broadleaf crops\n' +
     'Stadium BRDF: χ drives G(θ) for diffuse canopy. Patch blades: χ changes\n' +
-    'Campbell zenith sampling only when Mowing direction is near 0.',
+    'Campbell zenith sampling when crush map bend (R) is small.',
   );
 
   tip(
@@ -325,42 +325,6 @@ export function buildGui(
     'Mean blade width for Lolium perenne: 3–6 mm.\n' +
     'Hot-spot rL = bladeWidth / bladeHeight.\n' +
     'Narrower blades → broader, softer hot-spot lobe.',
-  );
-
-  tip(
-    canopy.add(grassParams, 'mowingStripeWidth', 2.0, 12.0, 0.1)
-      .name('Stripe width  [m]')
-      .onChange(onGrassChange),
-    'Mowing stripe width in metres.\n' +
-    'Adjacent stripes have blades tilted in opposite directions.\n' +
-    'FIFA broadcast standard: 5.0–5.5 m.',
-  );
-
-  tip(
-    canopy.add(grassParams, 'mowingStripesEnabled')
-      .name('Mowing stripes')
-      .onChange(onGrassChange),
-    'Alternating blade lean along the pitch length (broadcast stripe pattern).\n' +
-    'When off: uniform blade direction — no light/dark stripe contrast.\n' +
-    'Blade-face anisotropic specular (GGX) stays active in both cases.',
-  );
-
-  tip(
-    canopy.add(grassParams, 'bladeDirectionalWeight', 0.0, 1.0, 0.05)
-      .name('Mowing direction  [0–1]')
-      .onChange(onGrassChange),
-    'Blade-face specular normal: 0 = meadow (isotropic azimuth, Campbell mean tilt from chi).\n' +
-    '1 = stadium mowing (bladeTiltDeg and stripes). Intermediate values blend.\n' +
-    'Diffuse canopy (Ross, gaps, MS) always uses chiLAD only.',
-  );
-
-  tip(
-    canopy.add(grassParams, 'bladeTiltDeg', 30, 90, 1)
-      .name('Blade tilt  [deg]')
-      .onChange(onGrassChange),
-    'Mowing lean: blade face tilt from vertical toward +X [degrees].\n' +
-    'Used when Mowing direction > 0. At 0: meadow specular uses Campbell mean tilt from chi.\n' +
-    'Typical post-cut: 60–80°.  Flattened (rain, play): 40–55°.',
   );
 
   const leafOpt = grass.addFolder('Leaf optics (linear sRGB)');

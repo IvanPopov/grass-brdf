@@ -28,6 +28,7 @@ import {
 import { cctToColor } from '../lighting/colorTemp';
 import { sampleEh } from './IlluminanceSampler';
 import { campbellG, campbellM, sampleZenithFromCampbell } from '../math/campbellInclination';
+import { sampleCrushMap } from '../crushMap/crushMap';
 
 /** Ground tile: 25 cm square (FIFA pitch patch scale for desk debugging). */
 export const GRASS_PATCH_SIZE_M = 0.25;
@@ -50,7 +51,7 @@ const _worldUp = new THREE.Vector3(0, 1, 0);
 const _ehPoint = new THREE.Vector3(0, 0, 0);
 const _patchFwd = new THREE.Vector3();
 const _patchLookAt = new THREE.Vector3(0, 0.01, 0);
-/** Lamina mid-height offset: projection of world +Y onto blade plane (not field T or B). */
+/** Lamina mid-height offset: projection of world +Y onto blade plane. */
 const _bladeUp = new THREE.Vector3();
 
 /** Distance from patch look-at point to camera [m]. */
@@ -195,7 +196,8 @@ function orientationFromFaceNormal(q: THREE.Quaternion, nRaw: THREE.Vector3): vo
 }
 
 /**
- * Lamina quad: local +Z is face normal before rotateY(pi/2); after rotation +X is N for orientationFromFaceNormal.
+ * Single lamina quad (not a box): a thin box adds six faces; edge faces and GTAO darkened rims
+ * read as grayish green. The quad matches one dominant face normal for stable turf colour.
  */
 function makeBladeQuadGeometry(widthM: number, heightM: number): THREE.BufferGeometry {
   const g = new THREE.PlaneGeometry(widthM, heightM);
@@ -206,8 +208,11 @@ function makeBladeQuadGeometry(widthM: number, heightM: number): THREE.BufferGeo
 
 /**
  * field.frag.glsl: w=0 uses isotropic a_mean; w>0 uses anisotropic GGX in mow T/B frame.
- * Mesh tangent space follows growth (orientationFromFaceNormal), not mow T/B, so mowed patch specular
- * streak direction is only a rough match to the field until per-instance tangent or custom shader.
+ * Patch uses MeshPhysicalMaterial with one material for all instances: global mowCoherence and
+ * mowSpread modulate roughness and anisotropy (below) so the highlight responds to sliders, while
+ * per-blade normals come from sampleCrushMap (same R/G/B as the RTT). Mesh tangent space follows
+ * growth (orientationFromFaceNormal), not mow T/B, so mowed patch specular streak direction is only
+ * a rough match to the field until per-instance tangent or custom shader.
  */
 function applyPhysicalGrassBladeMaterial(
   bm: THREE.MeshPhysicalMaterial,
@@ -241,22 +246,6 @@ function bladeUpAlongLeaf(out: THREE.Vector3, nBlade: THREE.Vector3): void {
     out.set(0, 1, 0);
   }
   out.normalize();
-}
-
-function mowingLeanSign(
-  lx: number,
-  stripeWidthM: number,
-  patchHalfMow: boolean,
-  stripesEnabled: boolean,
-): number {
-  if (!stripesEnabled) {
-    return 1;
-  }
-  if (patchHalfMow) {
-    return lx < 0 ? -1 : 1;
-  }
-  const stripeIdx = Math.floor(lx / stripeWidthM);
-  return (((stripeIdx % 2) + 2) % 2) === 0 ? -1 : 1;
 }
 
 function shortestAngleDelta(fromRad: number, toRad: number): number {
@@ -298,18 +287,16 @@ function ambientMultiplierFromMS(grass: GrassBRDFParams): number {
 }
 
 /**
- * Independent Three.js scene: 25 cm turf patch with instanced blades driven by
- * GrassBRDFParams. Rendered in the lower-left corner via scissor (same renderer
- * as the stadium). Blades use MeshPhysicalMaterial (anisotropic GGX, IOR from F0).
- * Ground uses soil
- * albedo; blades use leaf albedo. Directional light intensity is scaled from
- * horizontal illuminance at field centre (sampleEh), split evenly between two
- * cornice SpotLights on +/-Z (across pitch width), both casting shadows.
+ * Independent Three.js scene: 25 cm turf patch with instanced blade quads driven by
+ * GrassBRDFParams. Crush map sampling uses the same `sampleCrushMap` math as the
+ * GPU RTT and field.frag (R bend, G coherence, B spread, A lean). The stadium shader
+ * uses a single macroscopic normal in the XZ plane per fragment; this patch keeps
+ * full Campbell azimuth plus mow alignment for orientation. Shared MeshPhysicalMaterial
+ * encodes global coherence and spread; per-texel G/B in the map drive alignment jitter
+ * and are consistent with the map texture.
  *
- * Optional GTAO: EffectComposer + RenderPass + GTAOPass in the
- * patch viewport only. Hemisphere sky colour is slightly mixed toward blade
- * albedo when the MS-derived ambient term is large (rough diffuse inter-reflection
- * cue; not a substitute for Sellers two-stream in field.frag.glsl).
+ * Rendered in the lower-left corner via scissor. Optional GTAO: EffectComposer +
+ * RenderPass + GTAOPass in the patch viewport only.
  */
 export class GrassBRDFPatchView {
   readonly scene: THREE.Scene;
@@ -381,12 +368,17 @@ export class GrassBRDFPatchView {
       envMapIntensity: 0.0,
       toneMapped:      true,
       side:            THREE.DoubleSide,
+      transparent:     false,
+      opacity:         1.0,
+      depthWrite:      true,
+      depthTest:       true,
     });
     this.instancedBlades = new THREE.InstancedMesh(bladeGeo, bladeMat, MAX_BLADES);
     this.instancedBlades.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.instancedBlades.castShadow = true;
     this.instancedBlades.receiveShadow = false;
     this.instancedBlades.frustumCulled = false;
+    this.instancedBlades.renderOrder = 1;
     this.instancedBlades.count = 0;
     this.scene.add(this.instancedBlades);
 
@@ -585,10 +577,14 @@ export class GrassBRDFPatchView {
       chi: grass.chiLAD,
       bh:  grass.bladeHeightM,
       bw:  grass.bladeWidthM,
-      sw:  grass.mowingStripeWidth,
-      ms:  grass.mowingStripesEnabled,
-      bt:  grass.bladeTiltDeg,
-      bdw: grass.bladeDirectionalWeight,
+      mb:  grass.mowBend,
+      mc:  grass.mowCoherence,
+      ms:  grass.mowSpread,
+      mxd: grass.mowMaxTiltDeg,
+      ame: grass.mowArtMowingEnabled,
+      asw: grass.mowArtStripeWidthM,
+      ase: grass.mowArtStripesEnabled,
+      abv: grass.mowArtStripeBendVariation,
       ar:  grass.bladeAlbedoR,
       ag:  grass.bladeAlbedoG,
       ab:  grass.bladeAlbedoB,
@@ -611,8 +607,8 @@ export class GrassBRDFPatchView {
     let n = Math.round((grass.lai * patchArea) / bladeOneSidedArea);
     n = Math.max(12, Math.min(MAX_BLADES, n));
 
-    const wDir = THREE.MathUtils.clamp(grass.bladeDirectionalWeight, 0, 1);
-    const showMowHalves = grass.mowingStripesEnabled && wDir > 1e-5;
+    const showMowHalves =
+      grass.mowArtMowingEnabled && grass.mowArtStripesEnabled && grass.mowBend > 1e-5;
 
     const matL = this.groundLeft.material as THREE.MeshStandardMaterial;
     const matR = this.groundRight.material as THREE.MeshStandardMaterial;
@@ -630,7 +626,15 @@ export class GrassBRDFPatchView {
 
     const bm = this.instancedBlades.material as THREE.MeshPhysicalMaterial;
     linearAlbedoToColor(grass.bladeAlbedoR, grass.bladeAlbedoG, grass.bladeAlbedoB, bm.color);
-    applyPhysicalGrassBladeMaterial(bm, grass, wDir);
+    const wDirMat = THREE.MathUtils.clamp(
+      grass.mowCoherence * (0.18 + 0.82 * grass.mowBend),
+      0,
+      1,
+    );
+    applyPhysicalGrassBladeMaterial(bm, grass, wDirMat);
+    const spr = grass.mowSpread;
+    bm.roughness = THREE.MathUtils.clamp(bm.roughness + spr * 0.24, 0.04, 1);
+    bm.anisotropy *= THREE.MathUtils.clamp(1 - spr * 0.62, 0, 1);
 
     const w = Math.max(1e-4, grass.bladeWidthM);
     const h = Math.max(1e-4, grass.bladeHeightM);
@@ -642,9 +646,7 @@ export class GrassBRDFPatchView {
     const cols = Math.ceil(Math.sqrt(n));
     const rows = Math.ceil(n / cols);
 
-    const tiltMowRad = THREE.MathUtils.degToRad(grass.bladeTiltDeg);
-    const patchStripeW = Math.max(0.04, Math.min(grass.mowingStripeWidth, GRASS_PATCH_SIZE_M * 0.45));
-    const patchHalfMow = showMowHalves;
+    const tiltMowRad = THREE.MathUtils.degToRad(grass.mowMaxTiltDeg);
     const chi = grass.chiLAD;
 
     let i = 0;
@@ -659,10 +661,23 @@ export class GrassBRDFPatchView {
         const thetaCamp = sampleZenithFromCampbell(chi, rnd);
         const psi = rnd() * Math.PI * 2;
 
-        const leanSign = mowingLeanSign(lx, patchStripeW, patchHalfMow, grass.mowingStripesEnabled);
+        const ms = sampleCrushMap(lx, lz, grass);
+        const wBlend = ms.w;
+        const leanSign = ms.leanSign;
         const mowedPsi = -leanSign * Math.PI / 2;
-        const finalPsi = psi + shortestAngleDelta(psi, mowedPsi) * wDir;
-        const finalTheta = THREE.MathUtils.lerp(thetaCamp, tiltMowRad, wDir);
+        // Match field.frag: geometric lean uses map R (wBlend) and lean (A), not G. Coherence (G) only
+        // scales anisotropic specular in evaluateGrassBRDF; wDirMat below applies it to MeshPhysicalMaterial.
+        const alignStrength = wBlend;
+        let finalPsi = psi + shortestAngleDelta(psi, mowedPsi) * alignStrength;
+        const sprEff = ms.spread * wBlend;
+        if (sprEff > 1e-7) {
+          finalPsi += (rnd() - 0.5) * 2 * sprEff * 0.55;
+        }
+        let finalTheta = THREE.MathUtils.lerp(thetaCamp, tiltMowRad, wBlend);
+        if (sprEff > 1e-7) {
+          finalTheta += (rnd() - 0.5) * 2 * sprEff * 0.35;
+        }
+        finalTheta = THREE.MathUtils.clamp(finalTheta, 1e-4, Math.PI * 0.5 - 1e-4);
 
         bladeNormalMeadow(_nBlade, finalTheta, finalPsi);
 
@@ -803,7 +818,7 @@ export class GrassBRDFPatchView {
   }
 }
 
-/** Same ACES + sRGB path as three.js OutputPass; `discard` keeps the stadium visible where RT alpha is zero. */
+/** Same ACES + sRGB path as three.js OutputPass; discard only empty background pixels (not low-alpha blades). */
 const PATCH_TONEMAP = {
   uniforms: {
     tDiffuse:            { value: null },
@@ -829,7 +844,7 @@ const PATCH_TONEMAP = {
     varying vec2 vUv;
     void main() {
       vec4 tex = texture2D( tDiffuse, vUv );
-      if ( tex.a < 0.001 ) discard;
+      if ( tex.a < 0.001 && length( tex.rgb ) < 0.0001 ) discard;
       gl_FragColor = tex;
       #ifdef LINEAR_TONE_MAPPING
         gl_FragColor.rgb = LinearToneMapping( gl_FragColor.rgb );

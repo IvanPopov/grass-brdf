@@ -20,6 +20,8 @@ import {
   GrassPatchDebug,
 } from './scene/GrassBRDFParams';
 import { GrassBRDFPatchView } from './debug/GrassBRDFPatchView';
+import { CrushMapGpu } from './crushMap/CrushMapGpu';
+import { buildCrushMapGui } from './ui/crushMapGui';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
 // Shallow copy so GUI mutations do not modify the original defaults.
@@ -34,6 +36,8 @@ const patchDebug: GrassPatchDebug = { ...DEFAULT_PATCH_DEBUG };
 
 const grassPatchView = new GrassBRDFPatchView();
 grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
+
+const crushMapGpu = new CrushMapGpu();
 
 // ── WebGL renderer ────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -99,7 +103,13 @@ const debug = new IlluminanceDebug();
 debug.init(scene);
 
 // ── GUI ───────────────────────────────────────────────────────────────────────
+let crushMapGuiHandle: ReturnType<typeof buildCrushMapGui>;
+
 function onGrassChange(): void {
+  crushMapGuiHandle?.updatePreview();
+  crushMapGpu.syncUniforms(grassParams);
+  crushMapGpu.render(renderer);
+  fieldMat.setCrushMapTexture(crushMapGpu.texture);
   fieldMat.updateGrass(grassParams, grassDebug, camera.position);
   grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }
@@ -112,6 +122,18 @@ const { gui, updateComputedDisplay } = buildGui(
   patchDebug,
   onGrassChange,
 );
+
+crushMapGuiHandle = buildCrushMapGui(grassParams, onGrassChange);
+document.body.appendChild(crushMapGuiHandle.host);
+Object.assign(crushMapGuiHandle.host.style, {
+  position:   'fixed',
+  left:       '8px',
+  top:        '8px',
+  zIndex:     '100',
+  maxHeight:  '92vh',
+  overflowY:  'auto',
+  pointerEvents: 'auto',
+});
 
 // Debug controls
 const debugFolder = gui.addFolder('Debug');
@@ -164,8 +186,7 @@ function rebuild(): void {
   heightAnnotation.build(params.rigHeight, params.ovalHalfLength + 10);
   fieldMat.update(lightRig.lights, params.iesExponent);
 
-  // Upload current grass BRDF params, debug flags, and camera position.
-  fieldMat.updateGrass(grassParams, grassDebug, camera.position);
+  onGrassChange();
 
   debug.iesExponent        = params.iesExponent;
   debug.fixtureLuminousArea = params.fixtureLuminousArea;
@@ -175,8 +196,6 @@ function rebuild(): void {
 
   const phys = computeGroupPhysics(params);
   updateComputedDisplay(phys, params);
-
-  grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }
 
 rebuild();

@@ -236,9 +236,9 @@ export interface GrassBRDFParams {
    * broadleaf crops, dense shade-grown layers.
    *
    * ── Patch preview (GrassBRDFPatchView) ──
-   * χ drives sampleZenithFromCampbell when bladeDirectionalWeight is near 0 (meadow
-   * blade orientations). When bladeDirectionalWeight is near 1, patch blades follow
-   * bladeTiltDeg and mowing only; χ still affects the stadium BRDF diffuse terms via G(θ).
+   * χ drives sampleZenithFromCampbell when mowing map blend w is small (meadow
+   * blade orientations). When w is large, patch blades follow mowMaxTiltDeg and the
+   * procedural mowing map; χ still affects the stadium BRDF diffuse terms via G(θ).
    */
   chiLAD: number;
 
@@ -526,99 +526,46 @@ export interface GrassBRDFParams {
   alphaB: number;
 
   /**
-   * Mowing stripe width [m].
-   *
-   * ── Source values ──
-   * FIFA Quality Programme for Football Turf (2015 ed.) §7.1:
-   *   "Stripes shall be created by rolling alternate bands in opposing
-   *   directions; width 5.0–5.5 m is recommended for broadcast clarity."
-   *   Minimum visible from HD cameras at ≥ 35 m height: ≈ 4.5 m.
-   *
-   * Named examples:
-   *   Wembley Stadium: 5.5 m (visible in broadcast, wider stripe)
-   *   Allianz Arena: 5.4 m (our default)
-   *   Emirates Stadium: 5.0 m
-   *   Santiago Bernabéu: 5.2 m
-   *   Camp Nou: 5.0 m
-   *
-   * [SH-ref] TILE_SIZE = 5.4 — exact match to our default.
-   *
-   * ── Reflectance ratio between stripes ──
-   * At bladeTiltDeg = 70°, camera at 45° zenith from the south:
-   *   V = (0, cos45°, −sin45°) = (0, 0.707, −0.707)
-   *   N_blade_front = (0, cos70°, −sin70°) = (0, 0.342, −0.940)
-   *   N_blade_back  = (0, cos70°, +sin70°) = (0, 0.342, +0.940)
-   *   dot(N_front, V) = 0.342×0.707 + 0.940×0.707 = 0.242 + 0.665 = 0.907 (bright)
-   *   dot(N_back,  V) = 0.342×0.707 − 0.940×0.707 = 0.242 − 0.665 = −0.423 (dark)
-   * Only the front stripe contributes specular (bNdotV > 0).
-   * Reflectance contrast (specular stripe vs. non-specular stripe):
-   *   I_ratio = D×F×G / (4×NdotV)  on one side, 0 on the other → binary contrast
-   *   In practice the diffuse terms are similar; contrast is dominated by specular.
-   *   Typical specular contribution at θ_v=45°: ≈ 2–5% of total BRDF.
-   *   Stripe contrast ≈ 10–20% (diffuse + specular on/off).
-   * Matches broadcast observations: 15–25% luma difference between stripes.
+   * Blend weight toward fully mowed blade-face tilt [0, 1]. Encoded in mowing map R.
+   * 0 = meadow macroscopic normal (vertical symmetry); 1 = full lean from mowMaxTiltDeg.
    */
-  mowingStripeWidth: number;
+  mowBend: number;
 
   /**
-   * When true (default), alternating blade lean along X creates visible mowing stripes.
-   * When false, all blades share the same lean (+X); diffuse canopy is unchanged,
-   * anisotropic GGX specular on the blade face still runs (no stripe contrast).
+   * Specular coherence: anisotropic streak along mow direction vs isotropic [0, 1].
+   * Encoded in mowing map G; passed as w_dir to evaluateGrassBRDF.
    */
-  mowingStripesEnabled: boolean;
+  mowCoherence: number;
 
   /**
-   * How strongly blade-face normals align with the mowed/stadium pattern [0, 1].
-   *
-   *   0 = meadow (isotropic): azimuth of the blade face is uniform on [0, 2 pi);
-   *       tilt from vertical for specular uses the Campbell (1990) ellipsoidal LAD
-   *       mean zenith angle from chiLAD (no fixed bladeTiltDeg).
-   *   1 = stadium mowing: same as the legacy model — normals follow bladeTiltDeg and
-   *       mowing stripes (alternating lean along world +X when stripes are enabled).
-   *
-   * Intermediate values linearly blend the two unit normals before specular GGX.
-   * Diffuse canopy terms (Ross single-scatter, gaps, MS) still use chiLAD only.
+   * Extra orientation variance for Toksvig roughness [0, 1]. Encoded in mowing map B.
    */
-  bladeDirectionalWeight: number;
+  mowSpread: number;
 
   /**
-   * Blade tilt angle from vertical toward world +X [degrees] (mowing lean).
-   *
-   * Used only when bladeDirectionalWeight is sufficiently large (mowing-dominated
-   * specular). At bladeDirectionalWeight = 0 (meadow), specular tilt comes from the
-   * Campbell distribution mean implied by chiLAD instead of this angle.
-   *
-   * ── Physical basis ──
-   * The mowing roller (cylinder mower) tilts blades as it passes.
-   * For a professional reel mower cutting at 27 mm:
-   *   Blade inclination immediately post-cut: 65–80° from horizontal
-   *   After 24 h recovery: settles to 55–70° (turgor pressure straightens them)
-   *   During play (foot compression): 30–50° (flattened by players)
-   *
-   * FIFA match-day standard (pre-match condition): 65–75°.
-   *
-   * ── Quantitative effect on stripe contrast ──
-   * Stripe contrast ratio (specular on vs. off) at θ_v = 45°, camera from south:
-   *   At bladeTiltDeg = 45°: dot(N_front, V) = cos45°×0.707 + sin45°×0.707 = 1.00 (max)
-   *   At bladeTiltDeg = 70°: dot(N_front, V) = 0.907  (our default)
-   *   At bladeTiltDeg = 80°: dot(N_front, V) = 0.817
-   *   At bladeTiltDeg = 30°: dot(N_back, V) = 0.707×0.5 − 0.866×0.707 = −0.258 (still dark)
-   * The 70° setting produces the strongest visible contrast from a 45° broadcast angle
-   * while remaining physically realistic for post-cut ryegrass.
-   *
-   * ── Shadertoy comparison ──
-   * [SH-ref] uses bend = 0.72 rad = 41.3° (from vertical), which is
-   * 90° − 41.3° = 48.7° from horizontal.
-   * This represents a more "laid-down" grass posture — possibly because the
-   * shadertoy is tuned to a specific camera angle where this produces
-   * optimal visual contrast.  The physical equivalent would be match-play
-   * condition with moderate player-induced flattening (48° from horizontal).
-   *
-   * Our default 70° (from horizontal) corresponds to a post-rolling,
-   * pre-match condition typical of match-day preparation, which produces
-   * more prominent stripe contrast for broadcast cameras.
+   * Maximum blade-face zenith tilt from vertical toward world +Z when mowBend map = 1 [deg].
    */
-  bladeTiltDeg: number;
+  mowMaxTiltDeg: number;
+
+  /**
+   * Art: when true, apply broadcast mowing layout (bands, alternating lean) to the crush map.
+   * When false, the map is spatially uniform; only model sliders change R/G/B.
+   */
+  mowArtMowingEnabled: boolean;
+
+  /**
+   * Art: stripe band width along world +X when mowing layout is on [m]. FIFA QP §7.1: 5.0–5.5 m.
+   */
+  mowArtStripeWidthM: number;
+
+  /** Art: alternating lean sign by stripe (light/dark TV stripes). Only if mowing layout is on. */
+  mowArtStripesEnabled: boolean;
+
+  /**
+   * Art: extra difference in crush strength (map R) between adjacent stripes for visibility.
+   * 0 = same crush in every band; 1 = strongest relative variation (about 8% of R).
+   */
+  mowArtStripeBendVariation: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -718,14 +665,12 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   // [Koch09] macro-scale: across-blade σ/Λ ≈ 0.50–0.70, median 0.60
   alphaB: 0.60,
 
-  // FIFA QP §7.1; matches [SH-ref] TILE_SIZE = 5.4 exactly
-  mowingStripeWidth: 5.4,
-
-  mowingStripesEnabled: true,
-
-  // 0 = isotropic meadow normals for specular; 1 = full mowing/stadium alignment
-  bladeDirectionalWeight: 0.0,
-
-  // Post-cut Lolium perenne on FIFA match day: 65–75°; shadertoy equivalent: 48.7°
-  bladeTiltDeg: 70.0,
+  mowBend:               0.0,
+  mowCoherence:          1.0,
+  mowSpread:             0.0,
+  mowMaxTiltDeg:         70.0,
+  mowArtMowingEnabled:   true,
+  mowArtStripeWidthM:    5.4,
+  mowArtStripesEnabled:  true,
+  mowArtStripeBendVariation: 1.0,
 };
