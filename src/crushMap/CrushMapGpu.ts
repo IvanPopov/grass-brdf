@@ -17,12 +17,14 @@ export class CrushMapGpu {
 
   constructor() {
     this.renderTarget = new THREE.WebGLRenderTarget(CRUSH_MAP_TEX_W, CRUSH_MAP_TEX_H, {
+      generateMipmaps: false,
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       wrapS:     THREE.ClampToEdgeWrapping,
       wrapT:     THREE.ClampToEdgeWrapping,
       colorSpace: THREE.NoColorSpace,
     });
+    this.renderTarget.texture.anisotropy = 1;
 
     this.scene  = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);

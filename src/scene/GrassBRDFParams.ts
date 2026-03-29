@@ -566,6 +566,56 @@ export interface GrassBRDFParams {
    * 0 = same crush in every band; 1 = strongest relative variation (about 8% of R).
    */
   mowArtStripeBendVariation: number;
+
+  // ---------------------------------------------------------------------------
+  // Micro-shadowing (field.frag.glsl): direct-light term on cuticle specular only.
+  // Occupancy and cone constants are in field.frag.glsl; this scales the effect only.
+  // ---------------------------------------------------------------------------
+
+  /** 0 = off, 1 = full micro-shadow on specular (Irradiance-style cone on blade normal). */
+  microShadowIntensity: number;
+
+  // ---------------------------------------------------------------------------
+  // Trampling overlay (CPU crush map): foot traffic stamped on top of mowing fill
+  // ---------------------------------------------------------------------------
+
+  /** When true, field uses CPU-filled crush map (mowing + trampling); GPU procedural RTT is skipped. */
+  trampEnabled: boolean;
+  /** Independent random paths across the pitch. */
+  trampPathCount: number;
+  /** Foot placements per path. */
+  trampStepsPerPath: number;
+  /** Typical stride when simulating walking [m]. */
+  trampWalkStrideM: number;
+  /** Typical stride when simulating running [m]. */
+  trampRunStrideM: number;
+  /** Probability [0,1] that a step uses walk stride instead of run stride. */
+  trampWalkFraction: number;
+  /** Smaller shoe contact length along travel [m] (e.g. youth or narrow boot). */
+  trampShoeSmallLengthM: number;
+  /** Smaller shoe contact width [m]. */
+  trampShoeSmallWidthM: number;
+  /** Larger shoe contact length along travel [m] (e.g. adult stud). */
+  trampShoeLargeLengthM: number;
+  /** Larger shoe contact width [m]. */
+  trampShoeLargeWidthM: number;
+  /** Probability [0,1] to stamp the small ellipse vs the large one each step. */
+  trampShoeSmallProbability: number;
+  /** Half-range [rad] for random heading drift per step (walk/run path noise). */
+  trampHeadingJitterRad: number;
+  /**
+   * Additive weight on map R (bend / crush) at full stamp (same channel meaning as mowBend).
+   * Mixing: outR = min(1, baseR + trampBend * footprintWeight); independent of base value until saturate.
+   */
+  trampBend: number;
+  /** Additive on map G (coherence), parallel to mowCoherence. */
+  trampCoherence: number;
+  /** Additive on map B (spread), parallel to mowSpread. */
+  trampSpread: number;
+  /** Ellipse radial falloff: weight = (1 - ell)^power; higher = sharper shoe edge. */
+  trampFalloffPower: number;
+  /** RNG seed for reproducible paths. */
+  trampSeed: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -581,11 +631,17 @@ export interface GrassBRDFDebug {
   dbgHotSpot: boolean;
   /** Isotropic multiple-scattering correction (two-stream, Sellers 1985). */
   dbgMS: boolean;
+  /**
+   * Directional blade-scale occlusion applied to cuticle specular only (not diffuse canopy).
+   * When off, specular uses no micro-occlusion factor (same as multiplying by 1).
+   */
+  dbgMicroShadow: boolean;
 }
 
 export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
-  dbgHotSpot: true,
-  dbgMS:      true,
+  dbgHotSpot:     true,
+  dbgMS:          true,
+  dbgMicroShadow: true,
 };
 
 /** Debug toggles for the lower-left MeshStandard turf patch only (not field.frag.glsl). */
@@ -665,12 +721,34 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   // [Koch09] macro-scale: across-blade σ/Λ ≈ 0.50–0.70, median 0.60
   alphaB: 0.60,
 
+  // Uniform meadow base (no mowed tilt in map R); mowing layout off until re-enabled in GUI.
   mowBend:               0.0,
-  mowCoherence:          1.0,
-  mowSpread:             0.0,
-  mowMaxTiltDeg:         70.0,
-  mowArtMowingEnabled:   true,
+  mowCoherence:          0.78,
+  mowSpread:             0.18,
+  mowMaxTiltDeg:         68.0,
+  mowArtMowingEnabled:   false,
   mowArtStripeWidthM:    5.4,
-  mowArtStripesEnabled:  true,
-  mowArtStripeBendVariation: 1.0,
+  mowArtStripesEnabled:  false,
+  mowArtStripeBendVariation: 0.75,
+
+  microShadowIntensity: 0.95,
+
+  // CPU trampling on by default: dense post-match wear (~20 active runners, mostly sprinting).
+  trampEnabled:          true,
+  trampPathCount:        22,
+  trampStepsPerPath:     200,
+  trampWalkStrideM:      0.68,
+  trampRunStrideM:       1.52,
+  trampWalkFraction:     0.22,
+  trampShoeSmallLengthM: 0.22,
+  trampShoeSmallWidthM:  0.09,
+  trampShoeLargeLengthM: 0.32,
+  trampShoeLargeWidthM:  0.13,
+  trampShoeSmallProbability: 0.55,
+  trampHeadingJitterRad: 0.58,
+  trampBend:             0.15,
+  trampCoherence:        0.07,
+  trampSpread:           0.12,
+  trampFalloffPower:     1.45,
+  trampSeed:             0x3a71c407,
 };

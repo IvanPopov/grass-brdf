@@ -27,10 +27,33 @@ export class FieldMaterial {
   private static makePlaceholderCrushMap(): THREE.DataTexture {
     const d = new Uint8Array([255, 255, 255, 255]);
     const t = new THREE.DataTexture(d, 1, 1, THREE.RGBAFormat);
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = 1;
     t.needsUpdate = true;
     t.flipY = false;
     t.colorSpace = THREE.NoColorSpace;
     return t;
+  }
+
+  /** Shared 1x1 black R8: micro-occlusion uses stamp texture; GPU crush has no footprints. */
+  private static blackTrampStampTex: THREE.DataTexture | null = null;
+
+  static getBlackTrampStampTexture(): THREE.DataTexture {
+    if (FieldMaterial.blackTrampStampTex === null) {
+      const d = new Uint8Array([0]);
+      const t = new THREE.DataTexture(d, 1, 1, THREE.RedFormat, THREE.UnsignedByteType);
+      t.generateMipmaps = false;
+      t.minFilter = THREE.LinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.anisotropy = 1;
+      t.needsUpdate = true;
+      t.flipY = false;
+      t.colorSpace = THREE.NoColorSpace;
+      FieldMaterial.blackTrampStampTex = t;
+    }
+    return FieldMaterial.blackTrampStampTex;
   }
 
   readonly material: THREE.ShaderMaterial;
@@ -77,12 +100,16 @@ export class FieldMaterial {
       lai:          { value: 3.5 },
       chiLAD:       { value: 0.5 },
       bladeRL:      { value: 0.004 / 0.027 }, // bladeWidthM / bladeHeightM
+      bladeHeightM: { value: 0.027 },
 
       bladeCampbellMeanTiltRad: { value: 0.7 },
 
       crushMap:   { value: FieldMaterial.makePlaceholderCrushMap() },
+      trampStampMap: { value: FieldMaterial.getBlackTrampStampTexture() },
       fieldSize:   { value: new THREE.Vector2(FIELD_W, FIELD_H) },
       mowMaxTiltRad: { value: 70.0 * Math.PI / 180.0 },
+
+      microShadowIntensity: { value: 0.95 },
 
       // Leaf optical properties (linear sRGB)
       bladeAlbedo: { value: new THREE.Vector3(0.045, 0.115, 0.025) },
@@ -94,15 +121,29 @@ export class FieldMaterial {
       alphaT:         { value: 0.15 },
       alphaB:         { value: 0.60 },
 
-      dbgHotSpot: { value: 1.0 },
-      dbgMS:      { value: 1.0 },
+      dbgHotSpot:     { value: 1.0 },
+      dbgMS:          { value: 1.0 },
+      dbgMicroShadow: { value: 1.0 },
     };
 
     this.material = this.createMaterial(grassLinear);
   }
 
   setCrushMapTexture(tex: THREE.Texture): void {
+    tex.anisotropy = 1;
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
     this.uniforms['crushMap'].value = tex;
+  }
+
+  /** CPU trampling footprint weights (R8). Use black 1x1 when GPU procedural crush is active. */
+  setTrampStampTexture(tex: THREE.Texture): void {
+    tex.anisotropy = 1;
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    this.uniforms['trampStampMap'].value = tex;
   }
 
   /**
@@ -200,6 +241,7 @@ export class FieldMaterial {
     u['lai'].value              = p.lai;
     u['chiLAD'].value           = p.chiLAD;
     u['bladeRL'].value          = p.bladeWidthM / p.bladeHeightM;
+    u['bladeHeightM'].value     = p.bladeHeightM;
 
     if (p.chiLAD !== this.cachedChiLAD) {
       this.cachedMeanZenithRad = estimateMeanZenithRad(p.chiLAD);
@@ -222,7 +264,10 @@ export class FieldMaterial {
     u['alphaT'].value            = p.alphaT;
     u['alphaB'].value            = p.alphaB;
 
-    u['dbgHotSpot'].value = dbg.dbgHotSpot ? 1.0 : 0.0;
-    u['dbgMS'].value      = dbg.dbgMS      ? 1.0 : 0.0;
+    u['dbgHotSpot'].value     = dbg.dbgHotSpot     ? 1.0 : 0.0;
+    u['dbgMS'].value          = dbg.dbgMS          ? 1.0 : 0.0;
+    u['dbgMicroShadow'].value = dbg.dbgMicroShadow ? 1.0 : 0.0;
+
+    u['microShadowIntensity'].value = p.microShadowIntensity;
   }
 }

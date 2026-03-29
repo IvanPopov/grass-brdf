@@ -35,13 +35,23 @@ uniform float isSurfaceGrass;
 uniform float lai;
 uniform float chiLAD;
 uniform float bladeRL;
+uniform float bladeHeightM;
 uniform float bladeCampbellMeanTiltRad;
 
 // Crush map (procedural RTT): R = blend w, G = coherence, B = spread, A = (leanSign+1)/2
+// trampStampMap: R8 footprint weight from CPU trampling only (0 = no micro-shadow crevice signal).
 // fieldSize: (FIELD_W, FIELD_H) [m].  mowMaxTiltRad: max face zenith from vertical [rad].
 uniform sampler2D crushMap;
+uniform sampler2D trampStampMap;
 uniform vec2      fieldSize;
 uniform float     mowMaxTiltRad;
+
+// Micro-shadow (specular): single user weight; crevice occupancy from crush map only; cone in-shader.
+// Irradiance part 1 (Jimenez cone vs blade normal) and part 2 (visibility cone, LUT skip):
+// https://irradiance.ca/posts/microshadowing-part1/
+// https://irradiance.ca/posts/microshadowing-part2/
+// Full VNDF integration / 3D LUT is not used; realtime analytic cone + soft Activision falloff.
+uniform float microShadowIntensity;
 
 // ── Leaf optical properties [linear sRGB, 0–1] ───────────────────────────────
 // bladeAlbedo: per-leaf reflectance ρ_leaf.
@@ -60,10 +70,12 @@ uniform float alphaT;
 uniform float alphaB;
 
 // ── Debug flags (1.0 = enabled, 0.0 = disabled) ──────────────────────────────
-//   dbgHotSpot — retroreflection enhancement; 0 → Chs clamped to 1 (Chen 1997)
-//   dbgMS      — two-stream multiple-scattering correction (Sellers 1985)
+//   dbgHotSpot     — retroreflection enhancement; 0 → Chs clamped to 1 (Chen 1997)
+//   dbgMS          — two-stream multiple-scattering correction (Sellers 1985)
+//   dbgMicroShadow — blade-scale specular occlusion; 0 → no micro factor on specular
 uniform float dbgHotSpot;
 uniform float dbgMS;
+uniform float dbgMicroShadow;
 
 in  vec3 vWorldPos;
 out vec4 fragColor;
@@ -310,6 +322,58 @@ float fresnelSchlick(float cosTheta, float F0) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4b — Micro-shadowing (direct light, blade normal)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Crevice-only micro-shadow on cuticle specular: occupancy from trampStampMap (footprint t) and
+// crush spread (B). Global mow bend in crush R tilts blades but must not drive micro-occlusion.
+// Jimenez cone: cosTheta = sqrt(O). Part 2 LUT skip when 2*Vis + N·V < 1. Soft Activision term
+// plus hard steps on blade normal for directional crevice contrast.
+
+#define MICRO_SPREAD_BOOST  0.28
+#define MICRO_CREVICE_POW   1.35
+#define MICRO_CREVICE_SCALE 1.08
+#define MICRO_EDGE_PAD      0.06
+#define MICRO_SOFT_HARD_MIX 0.92
+#define MICRO_CONTRAST_POW  1.18
+
+float turfMicroCreviceOccupancy(float stampWeight, float spreadB) {
+    float c = clamp(stampWeight, 0.0, 1.0);
+    if (c <= 1e-5) {
+        return 0.0;
+    }
+    float spreadBoost = 1.0 + clamp(spreadB, 0.0, 1.0) * MICRO_SPREAD_BOOST;
+    float O = pow(c, MICRO_CREVICE_POW) * spreadBoost * MICRO_CREVICE_SCALE;
+    return clamp(O, 0.0, 1.0);
+}
+
+float turfMicroShadowSpecularAtten(vec3 N_blade, vec3 L, vec3 V, float occupancy) {
+    float g = clamp(microShadowIntensity, 0.0, 1.0);
+    if (g <= 1e-6) {
+        return 1.0;
+    }
+    float O = clamp(occupancy, 0.0, 1.0);
+    if (O <= 1e-6) {
+        return 1.0;
+    }
+    float bNdL = max(dot(N_blade, L), 0.0);
+    float bNdV = max(dot(N_blade, V), 0.0);
+    float Vis = 1.0 - O;
+    if (2.0 * Vis + bNdV < 1.0) {
+        return mix(1.0, 0.0, g);
+    }
+    float cosT = sqrt(O);
+    float k = max(cosT, MICRO_EDGE_PAD);
+    float mL = saturate(bNdL / k);
+    float mV = saturate(bNdV / k);
+    float soft = (mL * mL) * (mV * mV);
+    float hard = step(cosT, bNdL) * step(cosT, bNdV);
+    float cone = mix(soft, hard, MICRO_SOFT_HARD_MIX);
+    cone = pow(max(cone, 0.0), MICRO_CONTRAST_POW);
+    return mix(1.0, cone, g);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SECTION 5 — BRDF EVALUATION
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -339,10 +403,10 @@ float fresnelSchlick(float cosTheta, float F0) {
 // Directional-hemispherical reflectance (DHR) = integral of f_r * cos(theta_v) dOmega_v
 // must be <= 1 for all incident directions.
 //
-// 1. Non-negativity: all terms are products of non-negative quantities. ✓
+// 1. Non-negativity: all terms are products of non-negative quantities (satisfied).
 //
 // 2. Helmholtz reciprocity:
-//    - ss, soil, ms terms: exactly reciprocal (all symmetric in L <-> V swap). ✓
+//    - ss, soil, ms terms: exactly reciprocal (all symmetric in L <-> V swap).
 //    - spec term: formal violation.  The formula D*F*G2/(4*bNdotV)*(1-Pgap_v)
 //      represents f_r_CT * bNdotL * (1-Pgap_v); under L<->V swap it becomes
 //      f_r_CT * bNdotV * (1-Pgap_L), which differs when bNdotL != bNdotV.
@@ -353,12 +417,23 @@ float fresnelSchlick(float cosTheta, float F0) {
 // 3. Energy conservation:
 //    Default params (omega_G=0.16, LAI=3.5, nadir):
 //      DHR_ss ≈ 1.9%,  DHR_soil ≈ 0.6%,  DHR_ms ≈ 0.5%,  DHR_spec ≈ 0.4%
-//      DHR_total ≈ 3.4% << 1.0  ✓
+//      DHR_total ≈ 3.4% << 1.0
 //    GUI maximum (omega_G=0.7, LAI=8):
 //      DHR_ms <= omega^2/(4*G_eff) * (1-Pgap) ≈ 24%,  DHR_ss <= omega/4 ≈ 18%
-//      DHR_total <= 42% << 1.0  ✓
+//      DHR_total <= 42% << 1.0
 //    Guard for omega > 1 (physically impossible, unreachable via GUI): see clamp below.
-vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float variance, float w_dir) {
+vec3 evaluateGrassBRDF(
+    vec3 L,
+    vec3 V,
+    vec3 N_blade,
+    float E_raw,
+    float M,
+    float variance,
+    float w_dir,
+    float microStampW,
+    float spreadB,
+    float bladeH
+) {
 
     // Surface normal is horizontal.
     float NdotL = max(0.0, L.y);      // cos of incidence on horizontal field
@@ -550,6 +625,10 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
 
         // Apply smooth blade-horizon fade.
         spec_term = vec3(spec_brdf_radiance) * spec_macro_attenuation * specFade;
+
+        float occ = turfMicroCreviceOccupancy(microStampW, spreadB);
+        float microSpec = turfMicroShadowSpecularAtten(N_blade, L, V, occ);
+        spec_term *= mix(1.0, microSpec, dbgMicroShadow);
     }
 
     return (ss_term + soil_term + ms_term + spec_term) * E_raw;
@@ -558,6 +637,19 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 6 — MAIN
 // ─────────────────────────────────────────────────────────────────────────────
+
+// RGB: linear (LOD 0) for smooth trampling ramps. A (leanSign): nearest texel only.
+// Full bilinear of RGBA averaged alpha toward 0.5 at stripe edges while R stayed high,
+// skewing N_blade and spiking specular in a one-pixel band.
+vec4 sampleCrushMapRgbLinearANearest(sampler2D smap, vec2 mapUv) {
+    vec4 rgbLin = textureLod(smap, mapUv, 0.0);
+    ivec2 dims = textureSize(smap, 0);
+    vec2 uv = clamp(mapUv, vec2(0.0), vec2(1.0) - vec2(1.0) / vec2(dims));
+    ivec2 ij = ivec2(floor(uv * vec2(dims)));
+    ij = clamp(ij, ivec2(0), dims - ivec2(1));
+    float aNearest = texelFetch(smap, ij, 0).a;
+    return vec4(rgbLin.rgb, aNearest);
+}
 
 void main() {
     float n = iesExponent;
@@ -579,11 +671,12 @@ void main() {
         float M = campbellM(chiLAD);
 
         vec2 mapUv = vec2(vWorldPos.x / fieldSize.x + 0.5, vWorldPos.z / fieldSize.y + 0.5);
-        vec4 m = texture(crushMap, mapUv);
+        vec4 m = sampleCrushMapRgbLinearANearest(crushMap, mapUv);
         float w_map = clamp(m.r, 0.0, 1.0);
         float coherence = clamp(m.g, 0.0, 1.0);
         float spread_map = clamp(m.b, 0.0, 1.0);
         float leanSign = m.a * 2.0 - 1.0;
+        float wStampMicro = textureLod(trampStampMap, mapUv, 0.0).r;
 
         float meadowTilt = bladeCampbellMeanTiltRad;
         float effectiveTilt = mix(meadowTilt, mowMaxTiltRad, w_map);
@@ -604,7 +697,18 @@ void main() {
             float E_raw = lightRawIrradiance(ld, vWorldPos, n, L);
             if (E_raw <= 0.0) continue;
 
-            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, variance, coherence) * lightColor;
+            totalL += evaluateGrassBRDF(
+                L,
+                V,
+                N_blade,
+                E_raw,
+                M,
+                variance,
+                coherence,
+                wStampMicro,
+                spread_map,
+                bladeHeightM
+            ) * lightColor;
         }
 
     } else {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { GrassBRDFParams } from '../scene/GrassBRDFParams';
 import { FIELD_H, FIELD_W } from '../config';
+import { applyTramplingOverlay } from './tramplingStamp';
 
 /** RGBA crush map: R = blend toward mowed, G = specular coherence, B = spread, A = (leanSign+1)/2 */
 export interface CrushMapSample {
@@ -46,8 +47,9 @@ export function sampleCrushMap(worldX: number, worldZ: number, p: GrassBRDFParam
   };
 }
 
-export const CRUSH_MAP_TEX_W = 256;
-export const CRUSH_MAP_TEX_H = 128;
+/** Long axis (field length X) at least 2048 texels; height matches pitch aspect ratio. */
+export const CRUSH_MAP_TEX_W = 2048;
+export const CRUSH_MAP_TEX_H = Math.max(1024, Math.round((CRUSH_MAP_TEX_W * FIELD_H) / FIELD_W));
 
 /**
  * Fills RGBA8 data for a DataTexture covering the field in world XZ (centred mesh).
@@ -84,18 +86,50 @@ export function createCrushMapDataTexture(): THREE.DataTexture {
     CRUSH_MAP_TEX_H,
     THREE.RGBAFormat,
   );
+  tex.generateMipmaps = false;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearFilter;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 1;
   tex.needsUpdate = true;
   tex.colorSpace = THREE.NoColorSpace;
   tex.flipY = false;
   return tex;
 }
 
-export function updateCrushMapDataTexture(tex: THREE.DataTexture, p: GrassBRDFParams): void {
-  const data = tex.image.data as Uint8Array;
-  fillCrushMapRGBA(data, CRUSH_MAP_TEX_W, CRUSH_MAP_TEX_H, p, FIELD_W, FIELD_H);
+/** R8 footprint weight only (CPU trampling). Black where no stamp; not used when GPU crush map is on. */
+export function createTrampStampDataTexture(): THREE.DataTexture {
+  const data = new Uint8Array(CRUSH_MAP_TEX_W * CRUSH_MAP_TEX_H);
+  const tex = new THREE.DataTexture(
+    data,
+    CRUSH_MAP_TEX_W,
+    CRUSH_MAP_TEX_H,
+    THREE.RedFormat,
+    THREE.UnsignedByteType,
+  );
+  tex.generateMipmaps = false;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 1;
   tex.needsUpdate = true;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  return tex;
+}
+
+export function updateCrushMapDataTexture(
+  tex: THREE.DataTexture,
+  stampTex: THREE.DataTexture,
+  p: GrassBRDFParams,
+): void {
+  const data = tex.image.data as Uint8Array;
+  const stampData = stampTex.image.data as Uint8Array;
+  fillCrushMapRGBA(data, CRUSH_MAP_TEX_W, CRUSH_MAP_TEX_H, p, FIELD_W, FIELD_H);
+  stampData.fill(0);
+  applyTramplingOverlay(data, stampData, CRUSH_MAP_TEX_W, CRUSH_MAP_TEX_H, p, FIELD_W, FIELD_H);
+  tex.needsUpdate = true;
+  stampTex.needsUpdate = true;
 }

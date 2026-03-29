@@ -6,6 +6,7 @@ import { DEFAULT_PARAMS, LightRigParams } from './config';
 import { LightRig, computeGroupPhysics } from './lighting/LightRig';
 import { LightRigVisual } from './lighting/LightRigVisual';
 import { createField } from './scene/Field';
+import { FieldMaterial } from './scene/FieldMaterial';
 import { createGrid } from './scene/Grid';
 import { createFieldAnnotations, createStandAnnotations, HeightAnnotation } from './scene/Annotations';
 import { Stands } from './scene/Stands';
@@ -21,6 +22,11 @@ import {
 } from './scene/GrassBRDFParams';
 import { GrassBRDFPatchView } from './debug/GrassBRDFPatchView';
 import { CrushMapGpu } from './crushMap/CrushMapGpu';
+import {
+  createCrushMapDataTexture,
+  createTrampStampDataTexture,
+  updateCrushMapDataTexture,
+} from './crushMap/crushMap';
 import { buildCrushMapGui } from './ui/crushMapGui';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
@@ -38,6 +44,8 @@ const grassPatchView = new GrassBRDFPatchView();
 grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
 
 const crushMapGpu = new CrushMapGpu();
+const crushMapCpuTex = createCrushMapDataTexture();
+const trampStampCpuTex = createTrampStampDataTexture();
 
 // ── WebGL renderer ────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -107,9 +115,16 @@ let crushMapGuiHandle: ReturnType<typeof buildCrushMapGui>;
 
 function onGrassChange(): void {
   crushMapGuiHandle?.updatePreview();
-  crushMapGpu.syncUniforms(grassParams);
-  crushMapGpu.render(renderer);
-  fieldMat.setCrushMapTexture(crushMapGpu.texture);
+  if (grassParams.trampEnabled) {
+    updateCrushMapDataTexture(crushMapCpuTex, trampStampCpuTex, grassParams);
+    fieldMat.setCrushMapTexture(crushMapCpuTex);
+    fieldMat.setTrampStampTexture(trampStampCpuTex);
+  } else {
+    crushMapGpu.syncUniforms(grassParams);
+    crushMapGpu.render(renderer);
+    fieldMat.setCrushMapTexture(crushMapGpu.texture);
+    fieldMat.setTrampStampTexture(FieldMaterial.getBlackTrampStampTexture());
+  }
   fieldMat.updateGrass(grassParams, grassDebug, camera.position);
   grassPatchView.sync(grassParams, lightRig.lights, params.iesExponent, params.colorTempK);
 }

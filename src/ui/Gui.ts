@@ -399,7 +399,7 @@ export function buildGui(
     'Moist sandy loam: ≈ 0.050.',
   );
 
-  const dbgFolder = grass.addFolder('Hot-spot / MS (debug)');
+  const dbgFolder = grass.addFolder('Debug');
   dbgFolder.close();
 
   tip(
@@ -419,6 +419,15 @@ export function buildGui(
     'Isotropic multiple-scattering correction (two-stream, Sellers 1985).\n' +
     'Accounts for energy missing from single-scattering approximation.\n' +
     'Typical contribution: 15–25% of total reflectance in the visible range.',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'dbgMicroShadow')
+      .name('Micro-occlusion on specular')
+      .onChange(onGrassChange),
+    'Directional blade-scale visibility term applied only to cuticle specular (Cook-Torrance).\n' +
+    'Not screen-space AO: diffuse single-scattering and soil terms are unchanged.\n' +
+    'When off: specular sees no micro-occlusion (multiply by 1).',
   );
 
   const specFolder = grass.addFolder('Blade specular (GGX)');
@@ -452,6 +461,14 @@ export function buildGui(
     'Serrated margins and cell boundaries create higher roughness across blade.\n' +
     'Koch et al. 2009: effective αB ≈ 0.50–0.70.\n' +
     'Higher value = broader, more diffuse specular in the perpendicular direction.',
+  );
+
+  tip(
+    grass.add(grassParams, 'microShadowIntensity', 0.0, 1.0, 0.01)
+      .name('Micro-shadow intensity (spec)')
+      .onChange(onGrassChange),
+    'Cuticle specular only. Uses CPU trampling stamp map (footprint weight), not global mow bend (R). ' +
+    'Off on the open pitch when trampling is disabled or GPU crush map is used. Irradiance-style cone; not full VNDF/LUT.',
   );
 
   const patchDbg = gui.addFolder('Grass patch (debug)');
