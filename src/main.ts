@@ -217,6 +217,7 @@ interface PresetData {
   patchDebug: GrassPatchDebug;
   exposure: number;
   maskData: { name: string; url: string } | null;
+  readonly?: boolean;
 }
 
 const STORAGE_KEY = 'grass_brdf_presets';
@@ -228,8 +229,17 @@ try {
   console.warn('Failed to load presets', e);
 }
 
+// Load built-in presets from the src/presets directory
+const builtInPresets = import.meta.glob('./presets/*.json', { eager: true });
+for (const path in builtInPresets) {
+  const name = path.replace('./presets/', '').replace('.json', '');
+  const data = (builtInPresets[path] as any).default as PresetData;
+  // Built-in presets are always loaded and marked as readonly.
+  savedPresets[name] = { ...data, readonly: true };
+}
+
 const presetState = {
-  currentPreset: Object.keys(savedPresets)[0] || '',
+  currentPreset: Object.keys(savedPresets).includes('default') ? 'default' : (Object.keys(savedPresets)[0] || ''),
   presetName: 'My Preset',
   save: () => {
     if (!presetState.presetName.trim()) return;
@@ -272,7 +282,12 @@ const presetState = {
     rebuild();
   },
   delete: () => {
-    if (!savedPresets[presetState.currentPreset]) return;
+    const current = savedPresets[presetState.currentPreset];
+    if (!current) return;
+    if (current.readonly) {
+      alert('This preset was imported from a file and is marked as non-deletable.');
+      return;
+    }
     delete savedPresets[presetState.currentPreset];
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets));
@@ -282,6 +297,47 @@ const presetState = {
     } catch (e) {
       console.warn(e);
     }
+  },
+  exportToFile: () => {
+    const data = savedPresets[presetState.currentPreset];
+    if (!data) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${presetState.currentPreset}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  importFromFile: () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (re) => {
+        try {
+          const data = JSON.parse(re.target?.result as string) as PresetData;
+          data.readonly = true;
+          let name = file.name.replace(/\.json$/i, '');
+          // Display the imported status in the name (optional)
+          // name = `[File] ${name}`;
+          
+          savedPresets[name] = data;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets));
+          updatePresetDropdown();
+          presetState.currentPreset = name;
+          presetController.updateDisplay();
+          presetState.load();
+        } catch (err) {
+          alert('Invalid preset file format.');
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
   }
 };
 
@@ -290,7 +346,6 @@ let presetController = presetsFolder.add(presetState, 'currentPreset', Object.ke
 
 function updatePresetDropdown() {
   const options = Object.keys(savedPresets);
-  // Recreate the controller to update the options dropdown properly in lil-gui
   const parent = presetController.parent;
   if (parent) {
     presetController.destroy();
@@ -302,6 +357,8 @@ presetsFolder.add(presetState, 'load').name('Load Preset');
 presetsFolder.add(presetState, 'delete').name('Delete Preset');
 presetsFolder.add(presetState, 'presetName').name('New Name');
 presetsFolder.add(presetState, 'save').name('Save Preset');
+presetsFolder.add(presetState, 'exportToFile').name('Export to JSON');
+presetsFolder.add(presetState, 'importFromFile').name('Import JSON');
 presetsFolder.open();
 
 // ── Camera controls ───────────────────────────────────────────────────────────
@@ -339,7 +396,13 @@ function rebuild(): void {
   updateComputedDisplay(phys, params);
 }
 
-rebuild();
+if (savedPresets['default']) {
+  presetState.currentPreset = 'default';
+  presetController.updateDisplay();
+  presetState.load();
+} else {
+  rebuild();
+}
 
 // ── Animation loop ────────────────────────────────────────────────────────────
 function animate(): void {
