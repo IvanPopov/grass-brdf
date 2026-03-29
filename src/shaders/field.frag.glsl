@@ -14,6 +14,7 @@
 //   row 2: (intensity, angleH,    penumbra,  angleV)
 //   row 3: (visorTan,  visorPenumbra, -,     -)
 uniform sampler2D lightData;
+uniform sampler2D blueNoiseTex;
 uniform int       lightCount;
 uniform float     iesExponent;
 uniform vec3      baseColor;       // linear-space surface colour (Lambertian mode)
@@ -75,6 +76,8 @@ uniform float dbgHotSpot;
 uniform float dbgSoil;
 uniform float dbgMS;
 uniform float dbgSpecular;
+uniform float dbgAAMeadow;
+uniform float meadowGridScale;
 
 in  vec3 vWorldPos;
 out vec4 fragColor;
@@ -344,17 +347,43 @@ float fresnelSchlick(float cosTheta, float F0) {
 // Stripe boundary at X=0 (field centre line): stripe −1 meets stripe 0 with
 // opposite lean → maximum contrast at centre. Layout is symmetric.
 
-float hashAzimuth(vec2 xz) {
-    vec2 c = floor(xz * 2.0);
-    return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+float hashAzimuth(vec2 worldXZ) {
+    // texture size is 64x64.
+    // NOTE: To avoid shimmering when the camera moves or rotates, we must NOT use 
+    // a mipmapped texture fetch or standard texture() if it's sampling nearest at sub-pixel levels.
+    // However, since we use footprint filtering in bladeFaceNormalMeadow, we evaluate the raw
+    // high-frequency texture here, and the shader smoothly transitions to macro-normal.
+    vec2 uv = worldXZ * (meadowGridScale / 64.0);
+    // Explicit LOD 0 to ensure we don't get hardware mipmap/anisotropy flickering
+    // since we handle the filtering mathematically via Toksvig macroBlend.
+    return textureLod(blueNoiseTex, uv, 0.0).r;
 }
 
 // Isotropic azimuth psi in [0, 2 pi); tilt theta = Campbell mean zenith (blade face from vertical).
-vec3 bladeFaceNormalMeadow(vec2 worldXZ, float thetaRad) {
+// Outputs macroBlend in [0, 1] which tells the BRDF how much geometric variance was lost
+// so that it can be converted into GGX roughness (Toksvig mapping principle).
+vec3 bladeFaceNormalMeadow(vec2 worldXZ, float thetaRad, out float macroBlend) {
     float psi = 6.28318530718 * hashAzimuth(worldXZ);
     float sx = sin(thetaRad);
     float cy = cos(thetaRad);
-    return vec3(sx * cos(psi), cy, -sx * sin(psi));
+    vec3 localNormal = vec3(sx * cos(psi), cy, -sx * sin(psi));
+    
+    macroBlend = 0.0;
+    
+    if (dbgAAMeadow > 0.5) {
+        vec2 dx = dFdx(worldXZ);
+        vec2 dy = dFdy(worldXZ);
+        float footprint = max(length(dx), length(dy));
+        
+        float cellSize = 1.0 / max(meadowGridScale, 0.001);
+        vec3 macroNormal = vec3(0.0, 1.0, 0.0);
+        
+        // As footprint covers multiple cells, blend normal towards average
+        macroBlend = smoothstep(cellSize * 0.5, cellSize * 2.0, footprint);
+        return normalize(mix(localNormal, macroNormal, macroBlend));
+    }
+    
+    return localNormal;
 }
 
 vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
@@ -364,10 +393,15 @@ vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
     return vec3(0.0, cos(tiltRad), leanSign * sin(tiltRad));
 }
 
-vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad) {
-    vec3 N_me = bladeFaceNormalMeadow(worldXZ, bladeCampbellMeanTiltRad);
+vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad, out float macroBlend) {
+    vec3 N_me = bladeFaceNormalMeadow(worldXZ, bladeCampbellMeanTiltRad, macroBlend);
     vec3 N_mo = bladeFaceNormalMowed(worldX, tiltRad);
     float w   = clamp(bladeDirectionalWeight, 0.0, 1.0);
+    
+    // Scale down the macroBlend if we are transitioning to mowed stripes,
+    // because mowed stripes have deterministic macro-normals (variance = 0)
+    macroBlend = macroBlend * (1.0 - w);
+    
     return normalize(mix(N_me, N_mo, w));
 }
 
@@ -416,7 +450,7 @@ vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad) {
 //      DHR_ms <= omega^2/(4*G_eff) * (1-Pgap) ≈ 24%,  DHR_ss <= omega/4 ≈ 18%
 //      DHR_total <= 42% << 1.0  ✓
 //    Guard for omega > 1 (physically impossible, unreachable via GUI): see clamp below.
-vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M) {
+vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float macroBlend) {
 
     // Surface normal is horizontal.
     float NdotL = max(0.0, L.y);      // cos of incidence on horizontal field
@@ -578,8 +612,19 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M) {
         float BdotL = dot(B, L);
         float BdotV = dot(B, V);
 
-        float D = D_GGX_aniso(NdotH, TdotH, BdotH, alphaT, alphaB);
-        float G = G2_aniso(bNdotL, bNdotV, TdotL, TdotV, BdotL, BdotV, alphaT, alphaB);
+        // ── Normal Variance Distribution (Toksvig / LEAN) ──
+        // Instead of directly feeding the macroBlend into the roughness,
+        // we use a variance-based approach to ensure the transition is physically sound.
+        // We compute the variance of the normal distribution over the pixel footprint.
+        float variance = macroBlend * 0.5; // Tuning parameter for how variance scales with footprint
+        
+        // Add footprint variance to the intrinsic roughness (Toksvig formula approximation).
+        // Using squared addition is physically more accurate for variance.
+        float aT = sqrt(alphaT * alphaT + variance);
+        float aB = sqrt(alphaB * alphaB + variance);
+
+        float D = D_GGX_aniso(NdotH, TdotH, BdotH, aT, aB);
+        float G = G2_aniso(bNdotL, bNdotV, TdotL, TdotV, BdotL, BdotV, aT, aB);
         float F = fresnelSchlick(VdotH, bladeCuticleF0);
 
         // Canopy attenuation: fraction of blades the view ray intersects.
@@ -619,7 +664,8 @@ void main() {
         float M = campbellM(chiLAD);
 
         // Blade face normal: meadow isotropy vs mowing (see bladeDirectionalWeight).
-        vec3 N_blade = bladeFaceNormalMixed(vWorldPos.xz, vWorldPos.x, bladeTiltRad);
+        float macroBlend = 0.0;
+        vec3 N_blade = bladeFaceNormalMixed(vWorldPos.xz, vWorldPos.x, bladeTiltRad, macroBlend);
 
         // In lighting-only mode: override leaf and soil colours with 18% grey.
         // Temporarily modify the BRDF via uniforms equivalent by branching here.
@@ -639,7 +685,7 @@ void main() {
             float E_raw = lightRawIrradiance(ld, vWorldPos, n, L);
             if (E_raw <= 0.0) continue;
 
-            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M) * lightColor;
+            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, macroBlend) * lightColor;
         }
 
         totalL *= colorScale;

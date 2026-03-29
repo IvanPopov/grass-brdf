@@ -642,6 +642,13 @@ export interface GrassBRDFDebug {
   dbgMS:        boolean;
   /** Anisotropic GGX specular from blade cuticle (Burley 2012 / Heitz 2014). */
   dbgSpecular:  boolean;
+  /** Anti-aliasing of procedural meadow azimuth via pixel footprint filtering. */
+  dbgAAMeadow:  boolean;
+  /**
+   * Scale of the procedural meadow azimuth grid [cells/m].
+   * Higher values = smaller grass patches. Default is 50.0 (2cm cells).
+   */
+  meadowGridScale: number;
 }
 
 export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
@@ -650,6 +657,8 @@ export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
   dbgSoil:     true,
   dbgMS:       true,
   dbgSpecular: true,
+  dbgAAMeadow: false,
+  meadowGridScale: 2.0,
 };
 
 /** Debug toggles for the lower-left MeshStandard turf patch only (not field.frag.glsl). */

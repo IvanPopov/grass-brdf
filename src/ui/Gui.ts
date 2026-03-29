@@ -486,6 +486,23 @@ export function buildGui(
     'Disabling shows pure diffuse response.',
   );
 
+  tip(
+    dbgFolder.add(grassDebug, 'dbgAAMeadow')
+      .name('AA Meadow azimuth')
+      .onChange(onGrassChange),
+    'Anti-aliasing of the procedural meadow azimuth noise.\n' +
+    'Uses analytic pixel footprint filtering to blend high-frequency\n' +
+    'stochastic normals toward the macroscopic average normal.',
+  );
+
+  tip(
+    dbgFolder.add(grassDebug, 'meadowGridScale', 1.0, 200.0, 1.0)
+      .name('Meadow grid scale')
+      .onChange(onGrassChange),
+    'Spatial scale of the procedural meadow azimuth cells [cells/m].\n' +
+    'Higher = smaller cells (e.g. 50 = 2cm cells). Requires AA Meadow to prevent aliasing.',
+  );
+
   const specFolder = grass.addFolder('Blade specular (GGX)');
   specFolder.close();
 
