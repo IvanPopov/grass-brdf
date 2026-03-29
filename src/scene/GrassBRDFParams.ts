@@ -626,30 +626,19 @@ export interface GrassBRDFParams {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Individual on/off switches for each physical BRDF component.
- * All default to true (fully enabled).  Toggling one off lets you observe
- * the isolated contribution of the remaining components.
+ * Optional modifiers for hot-spot and multiple-scattering terms (debug).
  */
 export interface GrassBRDFDebug {
-  /** Turbid-medium single-scattering from canopy blades (Ross 1981). */
-  dbgCanopySS:  boolean;
   /** Hot-spot retroreflection enhancement (Chen & Cihlar 1997).
    *  When off, Chs = 1.0 (no enhancement — base turbid-medium scattering only). */
-  dbgHotSpot:   boolean;
-  /** Lambertian soil visible through canopy gaps (Campbell 1990 gap fraction). */
-  dbgSoil:      boolean;
+  dbgHotSpot: boolean;
   /** Isotropic multiple-scattering correction (two-stream, Sellers 1985). */
-  dbgMS:        boolean;
-  /** Anisotropic GGX specular from blade cuticle (Burley 2012 / Heitz 2014). */
-  dbgSpecular:  boolean;
+  dbgMS: boolean;
 }
 
 export const DEFAULT_GRASS_DEBUG: GrassBRDFDebug = {
-  dbgCanopySS: true,
-  dbgHotSpot:  true,
-  dbgSoil:     true,
-  dbgMS:       true,
-  dbgSpecular: true,
+  dbgHotSpot: true,
+  dbgMS:      true,
 };
 
 /** Debug toggles for the lower-left MeshStandard turf patch only (not field.frag.glsl). */

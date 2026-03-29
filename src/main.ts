@@ -127,12 +127,6 @@ const grProbesCtrl = debugFolder.add(debug, 'showGrProbes').name('GR probes')
   .onChange(() => debug.rebuild(lightRig.lights));
 (grProbesCtrl.domElement as HTMLElement).title =
   'CIE 112 Glare Rating (EN 12193). green <30 / yellow 30-40 / orange 40-50 / red >50 (FIFA limit GR=50). Bar height = GR/5 m.';
-// In lighting-only mode the grass colour is replaced by 18 % neutral grey.
-// This reveals the pure illumination distribution (E_h contour) without the
-// green surface tinting the perception of uniformity.
-debugFolder.add({ lightingOnly: false }, 'lightingOnly')
-  .name('Lighting only (grey field)')
-  .onChange((v: boolean) => fieldMat.setLightingOnly(v));
 debugFolder.add({ log: () => debug.logReport(lightRig.lights) }, 'log')
   .name('Log report to console');
 debugFolder.open();

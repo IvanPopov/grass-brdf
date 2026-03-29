@@ -56,7 +56,6 @@ export class FieldMaterial {
       lightCount:   { value: 0 },
       iesExponent:  { value: 3.0 },
       lightColor:   { value: new THREE.Color(1, 1, 1) },
-      lightingOnly: { value: 0.0 },
 
       // Camera position for view-direction dependent BRDF.
       // Updated each frame by updateGrass().
@@ -90,12 +89,8 @@ export class FieldMaterial {
       mowingStripesEnabled: { value: 1.0 },
       meadowGridScale: { value: 50.0 },
 
-      // Per-component debug flags (1.0 = on, 0.0 = off).
-      dbgCanopySS: { value: 1.0 },
-      dbgHotSpot:  { value: 1.0 },
-      dbgSoil:     { value: 1.0 },
-      dbgMS:       { value: 1.0 },
-      dbgSpecular: { value: 1.0 },
+      dbgHotSpot: { value: 1.0 },
+      dbgMS:      { value: 1.0 },
     };
 
     this.material = this.createMaterial(grassLinear);
@@ -183,10 +178,6 @@ export class FieldMaterial {
     this.uniforms['iesExponent'].value = iesExp;
   }
 
-  setLightingOnly(enabled: boolean): void {
-    this.uniforms['lightingOnly'].value = enabled ? 1.0 : 0.0;
-  }
-
   /**
    * Uploads grass BRDF parameters, debug flags, and camera position to the GPU.
    * Call once per frame (or whenever params change) from the render loop.
@@ -224,10 +215,7 @@ export class FieldMaterial {
     u['mowingStripeWidth'].value     = p.mowingStripeWidth;
     u['mowingStripesEnabled'].value  = p.mowingStripesEnabled ? 1.0 : 0.0;
 
-    u['dbgCanopySS'].value = dbg.dbgCanopySS ? 1.0 : 0.0;
-    u['dbgHotSpot'].value  = dbg.dbgHotSpot  ? 1.0 : 0.0;
-    u['dbgSoil'].value     = dbg.dbgSoil     ? 1.0 : 0.0;
-    u['dbgMS'].value       = dbg.dbgMS       ? 1.0 : 0.0;
-    u['dbgSpecular'].value = dbg.dbgSpecular  ? 1.0 : 0.0;
+    u['dbgHotSpot'].value = dbg.dbgHotSpot ? 1.0 : 0.0;
+    u['dbgMS'].value      = dbg.dbgMS      ? 1.0 : 0.0;
   }
 }

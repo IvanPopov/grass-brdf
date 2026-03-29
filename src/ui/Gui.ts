@@ -435,18 +435,8 @@ export function buildGui(
     'Moist sandy loam: ≈ 0.050.',
   );
 
-  // ── Component toggles ───────────────────────────────────────────────────────
-  const dbgFolder = grass.addFolder('Components (debug toggles)');
+  const dbgFolder = grass.addFolder('Hot-spot / MS (debug)');
   dbgFolder.close();
-
-  tip(
-    dbgFolder.add(grassDebug, 'dbgCanopySS')
-      .name('Canopy single-scatter')
-      .onChange(onGrassChange),
-    'Turbid-medium single scattering from canopy blades.\n' +
-    '[Ross 1981, eq. 3.43]\n' +
-    'Dominant diffuse term — primary driver of canopy colour.',
-  );
 
   tip(
     dbgFolder.add(grassDebug, 'dbgHotSpot')
@@ -459,31 +449,12 @@ export function buildGui(
   );
 
   tip(
-    dbgFolder.add(grassDebug, 'dbgSoil')
-      .name('Soil background')
-      .onChange(onGrassChange),
-    'Lambertian soil/infill visible through canopy gaps.\n' +
-    'Attenuated by gap fraction from both illumination and view paths.\n' +
-    'At LAI=3.5: soil contributes ≈5–15% of total reflectance.',
-  );
-
-  tip(
     dbgFolder.add(grassDebug, 'dbgMS')
       .name('Multiple scattering')
       .onChange(onGrassChange),
     'Isotropic multiple-scattering correction (two-stream, Sellers 1985).\n' +
     'Accounts for energy missing from single-scattering approximation.\n' +
     'Typical contribution: 15–25% of total reflectance in the visible range.',
-  );
-
-  tip(
-    dbgFolder.add(grassDebug, 'dbgSpecular')
-      .name('Blade face specular')
-      .onChange(onGrassChange),
-    'Anisotropic GGX specular from the waxy blade cuticle.\n' +
-    'Evaluated on the blade face normal → produces mowing stripe brightness.\n' +
-    '[Burley 2012 NDF + Heitz 2014 G2 + Schlick Fresnel]\n' +
-    'Disabling shows pure diffuse response.',
   );
 
   const specFolder = grass.addFolder('Blade specular (GGX)');

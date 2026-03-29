@@ -18,7 +18,6 @@ uniform int       lightCount;
 uniform float     iesExponent;
 uniform vec3      baseColor;       // linear-space surface colour (Lambertian mode)
 uniform vec3      lightColor;      // CCT tint, luminance-normalised (Y = 1)
-uniform float     lightingOnly;    // 0 = surface colour, 1 = 18% grey
 
 // Camera world position (updated per frame by FieldMaterial.updateGrass).
 // Used to compute the view direction V for the per-fragment BRDF.
@@ -62,19 +61,11 @@ uniform float alphaB;
 uniform float mowingStripeWidth;
 uniform float mowingStripesEnabled;
 
-// ── Per-component debug flags (1.0 = enabled, 0.0 = disabled) ────────────────
-// Each flag multiplies or gates one physical BRDF term so components can be
-// isolated and studied independently.
-//   dbgCanopySS  — turbid-medium single scattering (Ross 1981)
-//   dbgHotSpot   — retroreflection enhancement; 0 → Chs clamped to 1 (Chen 1997)
-//   dbgSoil      — Lambertian soil through canopy gaps
-//   dbgMS        — two-stream multiple-scattering correction (Sellers 1985)
-//   dbgSpecular  — anisotropic GGX blade-face specular (Burley / Heitz)
-uniform float dbgCanopySS;
+// ── Debug flags (1.0 = enabled, 0.0 = disabled) ──────────────────────────────
+//   dbgHotSpot — retroreflection enhancement; 0 → Chs clamped to 1 (Chen 1997)
+//   dbgMS      — two-stream multiple-scattering correction (Sellers 1985)
 uniform float dbgHotSpot;
-uniform float dbgSoil;
 uniform float dbgMS;
-uniform float dbgSpecular;
 
 in  vec3 vWorldPos;
 out vec4 fragColor;
@@ -447,8 +438,7 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
     // an unbounded rho_ms.  The GUI sliders currently limit ω_G ≤ 0.7, so this
     // clamp is a safety guard for future parameter changes, not an active fix.
     vec3 omega   = clamp(bladeAlbedo + bladeTau, vec3(0.0), vec3(1.0));
-    vec3 ss_term = omega * (G_i * G_v * T_att * NdotL / max(denom_ss, 0.001)) * Chs
-                   * dbgCanopySS;
+    vec3 ss_term = omega * (G_i * G_v * T_att * NdotL / max(denom_ss, 0.001)) * Chs;
 
     // ── 4. Soil background ────────────────────────────────────────────────────
     //
@@ -460,7 +450,7 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
     //
     // Error of assuming independent gap probabilities (vs. correlated):
     //   < 10% for LAI < 5.  [Verhoef 1984, comparison section]
-    vec3 soil_term = soilAlbedo * (1.0 / PI) * Pgap_i * Pgap_v * NdotL * dbgSoil;
+    vec3 soil_term = soilAlbedo * (1.0 / PI) * Pgap_i * Pgap_v * NdotL;
 
     // ── 5. Multiple scattering (two-stream approximation) ────────────────────
     //
@@ -588,7 +578,7 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
         float spec_brdf_radiance = (D * F * G) / (4.0 * max(NdotV * NdotL, 0.0001));
 
         // Apply smooth blade-horizon fade.
-        spec_term = vec3(spec_brdf_radiance) * spec_macro_attenuation * specFade * dbgSpecular;
+        spec_term = vec3(spec_brdf_radiance) * spec_macro_attenuation * specFade;
     }
 
     return (ss_term + soil_term + ms_term + spec_term) * E_raw;
@@ -605,7 +595,7 @@ void main() {
     bool useGrassBRDF = (grassBRDFMode > 0.5) && (isSurfaceGrass > 0.5);
 
     // Lambertian surface colour (used in mode 0 and for stands).
-    vec3 surfColor = mix(baseColor, vec3(0.18), lightingOnly);
+    vec3 surfColor = baseColor;
 
     vec3 totalL = vec3(0.0);  // accumulated outgoing radiance
 
@@ -665,12 +655,6 @@ void main() {
         float meadowVariance = sinTheta * sinTheta * 0.5; // Tuning factor
         float variance = mix(meadowVariance, 0.0, w);
 
-        // In lighting-only mode: override leaf and soil colours with 18% grey.
-        float colorScale = 1.0;
-        if (lightingOnly > 0.5) {
-            colorScale = 0.18 / max(bladeAlbedo.g, 0.001);
-        }
-
         for (int i = 0; i < MAX_LIGHTS; i++) {
             if (i >= lightCount) break;
             LightData ld = readLight(i);
@@ -685,8 +669,6 @@ void main() {
             // the Toksvig high-roughness energy conservation, modelling the specular blur.
             totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, variance, w) * lightColor;
         }
-
-        totalL *= colorScale;
 
     } else {
         // ── Simple Lambertian mode (debug / stands) ────────────────────────────
