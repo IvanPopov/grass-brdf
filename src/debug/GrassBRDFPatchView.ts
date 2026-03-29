@@ -196,13 +196,12 @@ function orientationFromFaceNormal(q: THREE.Quaternion, nRaw: THREE.Vector3): vo
 }
 
 /**
- * Single lamina quad (not a box): a thin box adds six faces; edge faces and GTAO darkened rims
- * read as grayish green. The quad matches one dominant face normal for stable turf colour.
+ * Single lamina box (adds volume for GTAO shadowing).
+ * Order: (thin X, height Y, width Z) = (thickness, bladeHeight, bladeWidth).
  */
 function makeBladeQuadGeometry(widthM: number, heightM: number): THREE.BufferGeometry {
-  const g = new THREE.PlaneGeometry(widthM, heightM);
-  g.rotateY(Math.PI / 2);
-  g.computeTangents();
+  const thick = Math.max(0.0002, widthM * 0.12);
+  const g = new THREE.BoxGeometry(thick, heightM, widthM);
   return g;
 }
 
@@ -376,7 +375,7 @@ export class GrassBRDFPatchView {
     this.instancedBlades = new THREE.InstancedMesh(bladeGeo, bladeMat, MAX_BLADES);
     this.instancedBlades.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.instancedBlades.castShadow = true;
-    this.instancedBlades.receiveShadow = false;
+    this.instancedBlades.receiveShadow = true;
     this.instancedBlades.frustumCulled = false;
     this.instancedBlades.renderOrder = 1;
     this.instancedBlades.count = 0;
@@ -661,7 +660,55 @@ export class GrassBRDFPatchView {
         const thetaCamp = sampleZenithFromCampbell(chi, rnd);
         const psi = rnd() * Math.PI * 2;
 
-        const ms = sampleCrushMap(lx, lz, grass);
+        // For the debug patch, we calculate crush WITHOUT the procedural edge noise
+        // so that the boundary perfectly splits the 25cm patch down the middle.
+        // We replicate the base math of sampleCrushMap here minus the edgeNoise.
+        let ms: ReturnType<typeof sampleCrushMap>;
+        if (!grass.mowArtMowingEnabled) {
+          ms = {
+            w: THREE.MathUtils.clamp(grass.mowBend, 0, 1),
+            coherence: THREE.MathUtils.clamp(grass.mowCoherence, 0, 1),
+            spread: THREE.MathUtils.clamp(grass.mowSpread, 0, 1),
+            leanSign: 1,
+          };
+        } else {
+          let ls: number;
+          let rMod: number;
+          let distToEdge: number;
+          
+          if (showMowHalves) {
+            // Force the boundary exactly at lx = 0
+            const isLeft = lx < 0;
+            ls = isLeft ? -1 : 1;
+            const stripePhase = isLeft ? 0 : 1;
+            rMod = THREE.MathUtils.lerp(1.0 - 0.08 * grass.mowArtStripeBendVariation, 1.0, stripePhase);
+            distToEdge = Math.abs(lx);
+          } else {
+            const sw = Math.max(0.01, grass.mowArtStripeWidthM);
+            const stripeIdx = Math.floor(lx / sw);
+            const alt = stripeIdx % 2 === 0 ? -1 : 1;
+            ls = grass.mowArtStripesEnabled ? alt : 1;
+            const stripePhase = grass.mowArtStripesEnabled ? (stripeIdx % 2 === 0 ? 0 : 1) : 0;
+            rMod = grass.mowArtStripesEnabled
+              ? THREE.MathUtils.lerp(1.0 - 0.08 * grass.mowArtStripeBendVariation, 1.0, stripePhase)
+              : 1.0;
+            let localX = lx % sw;
+            if (localX < 0) localX += sw;
+            distToEdge = Math.min(localX, sw - localX);
+          }
+
+          const edgeCrushRaw = THREE.MathUtils.clamp(1.0 - distToEdge / 0.4, 0.0, 1.0);
+          const edgeCrush = edgeCrushRaw * edgeCrushRaw * (3.0 - 2.0 * edgeCrushRaw) * 0.06;
+          let rawW = grass.mowBend * rMod + edgeCrush;
+          
+          ms = {
+            w: THREE.MathUtils.clamp(rawW, 0, 1),
+            coherence: THREE.MathUtils.clamp(grass.mowCoherence, 0, 1),
+            spread: THREE.MathUtils.clamp(grass.mowSpread, 0, 1),
+            leanSign: ls,
+          };
+        }
+        
         const wBlend = ms.w;
         const leanSign = ms.leanSign;
         const mowedPsi = -leanSign * Math.PI / 2;
