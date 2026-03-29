@@ -355,7 +355,7 @@ export function buildGui(
   );
 
   tip(
-    canopy.add(grassParams, 'bladeTiltDeg', 30, 89, 1)
+    canopy.add(grassParams, 'bladeTiltDeg', 30, 90, 1)
       .name('Blade tilt  [deg]')
       .onChange(onGrassChange),
     'Mowing lean: blade face tilt from vertical toward +X [degrees].\n' +
@@ -484,23 +484,6 @@ export function buildGui(
     'Evaluated on the blade face normal → produces mowing stripe brightness.\n' +
     '[Burley 2012 NDF + Heitz 2014 G2 + Schlick Fresnel]\n' +
     'Disabling shows pure diffuse response.',
-  );
-
-  tip(
-    dbgFolder.add(grassDebug, 'dbgAAMeadow')
-      .name('AA Meadow azimuth')
-      .onChange(onGrassChange),
-    'Anti-aliasing of the procedural meadow azimuth noise.\n' +
-    'Uses analytic pixel footprint filtering to blend high-frequency\n' +
-    'stochastic normals toward the macroscopic average normal.',
-  );
-
-  tip(
-    dbgFolder.add(grassDebug, 'meadowGridScale', 1.0, 200.0, 1.0)
-      .name('Meadow grid scale')
-      .onChange(onGrassChange),
-    'Spatial scale of the procedural meadow azimuth cells [cells/m].\n' +
-    'Higher = smaller cells (e.g. 50 = 2cm cells). Requires AA Meadow to prevent aliasing.',
   );
 
   const specFolder = grass.addFolder('Blade specular (GGX)');

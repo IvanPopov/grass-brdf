@@ -612,10 +612,35 @@ export class GrassBRDFPatchView {
 
         const thetaCamp = sampleZenithFromCampbell(chi, rnd);
         const psi = rnd() * Math.PI * 2;
-        bladeNormalMeadow(_tmpV, thetaCamp, psi);
-        bladeNormalMowed(_faceN, lx, tiltMowRad, patchStripeW, grass.mowingStripesEnabled, patchHalfMow);
-        _nBlade.copy(_tmpV).lerp(_faceN, wDir).normalize();
+        
+        // Determine mowing stripe lean sign
+        let leanSign = 1;
+        if (grass.mowingStripesEnabled) {
+          if (patchHalfMow) {
+            leanSign = lx < 0 ? -1 : 1;
+          } else {
+            const stripeIdx = Math.floor(lx / patchStripeW);
+            leanSign = (((stripeIdx % 2) + 2) % 2) === 0 ? -1 : 1;
+          }
+        }
 
+        // Mowed azimuth corresponds to leanSign
+        // leanSign =  1 -> +Z -> psi = -pi/2
+        // leanSign = -1 -> -Z -> psi = +pi/2
+        const mowedPsi = -leanSign * Math.PI / 2;
+
+        // Shortest path interpolation for azimuth
+        let dPsi = mowedPsi - psi;
+        while (dPsi > Math.PI) dPsi -= Math.PI * 2;
+        while (dPsi < -Math.PI) dPsi += Math.PI * 2;
+        
+        const finalPsi = psi + dPsi * wDir;
+        const finalTheta = THREE.MathUtils.lerp(thetaCamp, tiltMowRad, wDir);
+
+        // Generate final perfectly spherical normal (no vector length loss!)
+        bladeNormalMeadow(_nBlade, finalTheta, finalPsi);
+
+        // Convert face normal to instance orientation (keeping +Y up)
         orientationFromFaceNormal(_tmpQ, _nBlade);
 
         _tmpM.compose(_tmpV.set(lx, 0, lz), _tmpQ, _bladeScale);

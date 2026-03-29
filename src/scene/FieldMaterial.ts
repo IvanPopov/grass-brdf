@@ -4,7 +4,6 @@ import { GrassBRDFParams, GrassBRDFDebug } from './GrassBRDFParams';
 import { estimateMeanZenithRad } from '../math/campbellInclination';
 import fieldVertGlsl from '../shaders/field.vert.glsl';
 import fieldFragGlsl from '../shaders/field.frag.glsl';
-import blueNoiseUrl from '../textures/BlueNoise64Tiled.png';
 
 /**
  * Custom ShaderMaterial for the pitch surface.
@@ -50,24 +49,10 @@ export class FieldMaterial {
     this.texture.minFilter  = THREE.NearestFilter;
     this.texture.needsUpdate = true;
 
-    const texLoader = new THREE.TextureLoader();
-    const blueNoiseTex = texLoader.load(blueNoiseUrl);
-    blueNoiseTex.wrapS = THREE.RepeatWrapping;
-    blueNoiseTex.wrapT = THREE.RepeatWrapping;
-    // VERY IMPORTANT: Disable mipmaps entirely for the noise texture to prevent
-    // hardware trilinear filtering from causing shimmering/aliasing when the camera rotates.
-    // The shader handles the AA mathematically via footprint filtering.
-    blueNoiseTex.generateMipmaps = false;
-    // We revert to NearestFilter. Linear filtering of azimuth angles causes interpolation
-    // artifacts (it interpolates the angle linearly, causing "swirls" and contours).
-    blueNoiseTex.minFilter = THREE.NearestFilter;
-    blueNoiseTex.magFilter = THREE.NearestFilter;
-
     const grassLinear = new THREE.Color(0x2d7a2d).convertSRGBToLinear();
 
     this.uniforms = {
       lightData:    { value: this.texture },
-      blueNoiseTex: { value: blueNoiseTex },
       lightCount:   { value: 0 },
       iesExponent:  { value: 3.0 },
       lightColor:   { value: new THREE.Color(1, 1, 1) },
@@ -111,7 +96,6 @@ export class FieldMaterial {
       dbgSoil:     { value: 1.0 },
       dbgMS:       { value: 1.0 },
       dbgSpecular: { value: 1.0 },
-      dbgAAMeadow: { value: 1.0 },
     };
 
     this.material = this.createMaterial(grassLinear);
@@ -245,7 +229,5 @@ export class FieldMaterial {
     u['dbgSoil'].value     = dbg.dbgSoil     ? 1.0 : 0.0;
     u['dbgMS'].value       = dbg.dbgMS       ? 1.0 : 0.0;
     u['dbgSpecular'].value = dbg.dbgSpecular  ? 1.0 : 0.0;
-    u['dbgAAMeadow'].value = dbg.dbgAAMeadow  ? 1.0 : 0.0;
-    u['meadowGridScale'].value = dbg.meadowGridScale;
   }
 }

@@ -14,7 +14,6 @@
 //   row 2: (intensity, angleH,    penumbra,  angleV)
 //   row 3: (visorTan,  visorPenumbra, -,     -)
 uniform sampler2D lightData;
-uniform sampler2D blueNoiseTex;
 uniform int       lightCount;
 uniform float     iesExponent;
 uniform vec3      baseColor;       // linear-space surface colour (Lambertian mode)
@@ -76,8 +75,6 @@ uniform float dbgHotSpot;
 uniform float dbgSoil;
 uniform float dbgMS;
 uniform float dbgSpecular;
-uniform float dbgAAMeadow;
-uniform float meadowGridScale;
 
 in  vec3 vWorldPos;
 out vec4 fragColor;
@@ -347,62 +344,11 @@ float fresnelSchlick(float cosTheta, float F0) {
 // Stripe boundary at X=0 (field centre line): stripe −1 meets stripe 0 with
 // opposite lean → maximum contrast at centre. Layout is symmetric.
 
-float hashAzimuth(vec2 worldXZ) {
-    // texture size is 64x64.
-    // NOTE: To avoid shimmering when the camera moves or rotates, we must NOT use 
-    // a mipmapped texture fetch or standard texture() if it's sampling nearest at sub-pixel levels.
-    // However, since we use footprint filtering in bladeFaceNormalMeadow, we evaluate the raw
-    // high-frequency texture here, and the shader smoothly transitions to macro-normal.
-    vec2 uv = worldXZ * (meadowGridScale / 64.0);
-    // Explicit LOD 0 to ensure we don't get hardware mipmap/anisotropy flickering
-    // since we handle the filtering mathematically via Toksvig macroBlend.
-    return textureLod(blueNoiseTex, uv, 0.0).r;
-}
-
-// Isotropic azimuth psi in [0, 2 pi); tilt theta = Campbell mean zenith (blade face from vertical).
-// Outputs macroBlend in [0, 1] which tells the BRDF how much geometric variance was lost
-// so that it can be converted into GGX roughness (Toksvig mapping principle).
-vec3 bladeFaceNormalMeadow(vec2 worldXZ, float thetaRad, out float macroBlend) {
-    float psi = 6.28318530718 * hashAzimuth(worldXZ);
-    float sx = sin(thetaRad);
-    float cy = cos(thetaRad);
-    vec3 localNormal = vec3(sx * cos(psi), cy, -sx * sin(psi));
-    
-    macroBlend = 0.0;
-    
-    if (dbgAAMeadow > 0.5) {
-        vec2 dx = dFdx(worldXZ);
-        vec2 dy = dFdy(worldXZ);
-        float footprint = max(length(dx), length(dy));
-        
-        float cellSize = 1.0 / max(meadowGridScale, 0.001);
-        vec3 macroNormal = vec3(0.0, 1.0, 0.0);
-        
-        // As footprint covers multiple cells, blend normal towards average
-        macroBlend = smoothstep(cellSize * 0.5, cellSize * 2.0, footprint);
-        return normalize(mix(localNormal, macroNormal, macroBlend));
-    }
-    
-    return localNormal;
-}
-
 vec3 bladeFaceNormalMowed(float worldX, float tiltRad) {
     float stripeIdx = floor(worldX / mowingStripeWidth);
     float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
     float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
     return vec3(0.0, cos(tiltRad), leanSign * sin(tiltRad));
-}
-
-vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad, out float macroBlend) {
-    vec3 N_me = bladeFaceNormalMeadow(worldXZ, bladeCampbellMeanTiltRad, macroBlend);
-    vec3 N_mo = bladeFaceNormalMowed(worldX, tiltRad);
-    float w   = clamp(bladeDirectionalWeight, 0.0, 1.0);
-    
-    // Scale down the macroBlend if we are transitioning to mowed stripes,
-    // because mowed stripes have deterministic macro-normals (variance = 0)
-    macroBlend = macroBlend * (1.0 - w);
-    
-    return normalize(mix(N_me, N_mo, w));
 }
 
 // Evaluate the full physical OBC grass BRDF for one light source.
@@ -450,7 +396,7 @@ vec3 bladeFaceNormalMixed(vec2 worldXZ, float worldX, float tiltRad, out float m
 //      DHR_ms <= omega^2/(4*G_eff) * (1-Pgap) ≈ 24%,  DHR_ss <= omega/4 ≈ 18%
 //      DHR_total <= 42% << 1.0  ✓
 //    Guard for omega > 1 (physically impossible, unreachable via GUI): see clamp below.
-vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float macroBlend) {
+vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float variance, float w_dir) {
 
     // Surface normal is horizontal.
     float NdotL = max(0.0, L.y);      // cos of incidence on horizontal field
@@ -613,28 +559,36 @@ vec3 evaluateGrassBRDF(vec3 L, vec3 V, vec3 N_blade, float E_raw, float M, float
         float BdotV = dot(B, V);
 
         // ── Normal Variance Distribution (Toksvig / LEAN) ──
-        // Instead of directly feeding the macroBlend into the roughness,
-        // we use a variance-based approach to ensure the transition is physically sound.
-        // We compute the variance of the normal distribution over the pixel footprint.
-        float variance = macroBlend * 0.5; // Tuning parameter for how variance scales with footprint
-        
-        // Add footprint variance to the intrinsic roughness (Toksvig formula approximation).
+        // Add geometric variance to the intrinsic roughness (Toksvig formula approximation).
         // Using squared addition is physically more accurate for variance.
         float aT = sqrt(alphaT * alphaT + variance);
         float aB = sqrt(alphaB * alphaB + variance);
+
+        // If it's a pure meadow (w_dir = 0), the azimuthal distribution is isotropic,
+        // so the macro specular lobe should be isotropic. We blend the roughnesses.
+        float a_mean = (aT + aB) * 0.5;
+        aT = mix(a_mean, aT, w_dir);
+        aB = mix(a_mean, aB, w_dir);
 
         float D = D_GGX_aniso(NdotH, TdotH, BdotH, aT, aB);
         float G = G2_aniso(bNdotL, bNdotV, TdotL, TdotV, BdotL, BdotV, aT, aB);
         float F = fresnelSchlick(VdotH, bladeCuticleF0);
 
-        // Canopy attenuation: fraction of blades the view ray intersects.
-        float canopyFrac = 1.0 - Pgap_v;
+        // ── Volumetric Macro-Shadowing for Specular ──
+        // Instead of just (1 - Pgap_v), we must account for the probability that 
+        // the microfacet is BOTH visible AND illuminated. This is the same bidirectional
+        // attenuation integral used in the diffuse single-scattering term.
+        float spec_macro_attenuation = (T_att / max(k_i + k_v, 0.0001)) * Chs;
 
-        // Full Cook-Torrance: D×F×G / (4×bNdotL×bNdotV) × bNdotL = D×F×G / (4×bNdotV)
-        float spec_brdf_times_bNdotL = D * F * G / (4.0 * bNdotV);
+        // Full Cook-Torrance: D×F×G / (4×NdotL_micro×NdotV_micro)
+        // However, the microfacet projections (bNdotL and bNdotV) exactly cancel out!
+        // 1. bNdotL cancels with the leaf irradiance projection (E_leaf = E_beam * bNdotL).
+        // 2. bNdotV cancels with the volumetric visible area fraction (A_vis = bNdotV / V.y).
+        // The resulting macroscopic BRDF correctly uses the MACRO surface projections (NdotL and NdotV).
+        float spec_brdf_radiance = (D * F * G) / (4.0 * max(NdotV * NdotL, 0.0001));
 
-        // Project to horizontal surface; apply smooth blade-horizon fade.
-        spec_term = vec3(spec_brdf_times_bNdotL) * canopyFrac * NdotL * specFade * dbgSpecular;
+        // Apply smooth blade-horizon fade.
+        spec_term = vec3(spec_brdf_radiance) * spec_macro_attenuation * specFade * dbgSpecular;
     }
 
     return (ss_term + soil_term + ms_term + spec_term) * E_raw;
@@ -663,16 +617,57 @@ void main() {
         // Campbell M coefficient: constant for this fragment (only depends on chi).
         float M = campbellM(chiLAD);
 
-        // Blade face normal: meadow isotropy vs mowing (see bladeDirectionalWeight).
-        float macroBlend = 0.0;
-        vec3 N_blade = bladeFaceNormalMixed(vWorldPos.xz, vWorldPos.x, bladeTiltRad, macroBlend);
+        // Generate baseline blade normal
+        // The effective tilt is the mowed tilt scaled by the directional weight.
+        // This exactly matches the spherical interpolation (slerp) used in the patch.
+        // Mowing tilt from normal: 0 tilt means vertical (Y=1), pi/2 means horizontal (Z=1).
+        // For the BRDF, bladeTiltRad is the angle of the face normal from the vertical (Y axis).
+        // If Blade Tilt = 89 deg (~pi/2), the normal is almost horizontal (0, 0, 1), which means
+        // the physical grass blade is standing VERTICAL.
+        // If Blade Tilt = 30 deg, the normal is (0, cos(30), sin(30)), meaning the blade
+        // is lying down close to the ground (tilted 60 degrees from vertical).
+        
+        // The effective tilt angle ranges from 0 (vertical grass) to bladeTiltRad.
+        // On the patch, Mowed normals lean entirely in the Z direction (or -Z).
+        // Since we removed noise, the analytical mean meadow normal is strictly vertical (Y=1).
+        // A pure meadow grass is vertical, so its face normal is perfectly horizontal.
+        // Wait, if grass is vertical, its face normal points horizontally (Y=0).
+        // The *average* face normal of a ring of vertical grass blades is (0, 0, 0)!
+        // If we use (0, 1, 0) for the meadow normal, we are treating the meadow like a FLAT FLOOR.
+        // This causes the extreme bright specular highlight pointing straight up.
+        
+        float stripeIdx = floor(vWorldPos.x / mowingStripeWidth);
+        float altSign   = (mod(stripeIdx, 2.0) < 1.0) ? -1.0 : 1.0;
+        float leanSign  = mix(1.0, altSign, mowingStripesEnabled);
+        
+        float w = clamp(bladeDirectionalWeight, 0.0, 1.0);
+        
+        // To match the patch perfectly, the macroscopic normal must preserve the correct zenith tilt.
+        // Meadow has a mean tilt from Campbell LAD. Mowed has a fixed blade tilt.
+        float meadowTilt = bladeCampbellMeanTiltRad;
+        float effectiveTilt = mix(meadowTilt, bladeTiltRad, w);
+        
+        // At w=0, the meadow is perfectly isotropic. A macroscopic surface of isotropic 
+        // vertical grass has a perfectly symmetric specular lobe, pointing straight up.
+        // We use an epsilon on Y to guarantee (0, 1, 0) normal when w=0 to preserve symmetry,
+        // instead of picking an arbitrary azimuth (like +X) which causes one-sided bright streaks.
+        // As w > 0, the grass twists towards Z, instantly becoming highly anisotropic.
+        float yComp = cos(effectiveTilt);
+        float zComp = leanSign * sin(effectiveTilt) * w;
+        
+        vec3 N_blade = normalize(vec3(0.0, yComp + 0.0001, zComp));
+
+        // Compute the geometric variance lost by using a macroscopic average normal.
+        // For pure meadow (w=0), normals are spread in a ring with tilt theta. 
+        // A simple variance proxy is sin(theta)^2.
+        // For pure mowed (w=1), all normals face the exact same way, so variance is 0.
+        float sinTheta = sin(bladeCampbellMeanTiltRad);
+        float meadowVariance = sinTheta * sinTheta * 0.5; // Tuning factor
+        float variance = mix(meadowVariance, 0.0, w);
 
         // In lighting-only mode: override leaf and soil colours with 18% grey.
-        // Temporarily modify the BRDF via uniforms equivalent by branching here.
-        // (GLSL 300 es does not allow writing to uniforms; we scale the result.)
         float colorScale = 1.0;
         if (lightingOnly > 0.5) {
-            // 0.18 / mean(bladeAlbedo.g) ≈ scale to neutralise colour; keep Eh response.
             colorScale = 0.18 / max(bladeAlbedo.g, 0.001);
         }
 
@@ -685,7 +680,10 @@ void main() {
             float E_raw = lightRawIrradiance(ld, vWorldPos, n, L);
             if (E_raw <= 0.0) continue;
 
-            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, macroBlend) * lightColor;
+            // Compute purely analytical macro BRDF (no stochastics).
+            // We pass the computed variance and directional weight to fully trigger 
+            // the Toksvig high-roughness energy conservation, modelling the specular blur.
+            totalL += evaluateGrassBRDF(L, V, N_blade, E_raw, M, variance, w) * lightColor;
         }
 
         totalL *= colorScale;
