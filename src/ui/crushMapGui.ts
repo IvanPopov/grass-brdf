@@ -4,6 +4,7 @@ import type { GrassBRDFParams } from '../scene/GrassBRDFParams';
 import { fillBladeAlbedoMapData, fillBladeTauMapData } from '../crushMap/bladeOpticalMaps';
 import { fillCrushMapRGBA } from '../crushMap/crushMap';
 import { applyTramplingOverlay } from '../crushMap/tramplingStamp';
+import { fillWearMap, WEAR_MAP_TEX_W, WEAR_MAP_TEX_H } from '../crushMap/wearMap';
 import { FIELD_H, FIELD_W } from '../config';
 
 /** CPU preview resolution (aspect matches FIELD_W : FIELD_H). */
@@ -129,12 +130,18 @@ export function buildCrushMapGui(
     'Blade tau map',
     'Per-leaf tau (linear sRGB), field.frag sampling.',
   );
+  const wearPrev = appendPreviewColumn(
+    'Wear / LAI map',
+    'R channel: 0=base LAI, 1=wear LAI.',
+  );
 
   host.appendChild(mapRow);
 
   const u8Crush = new Uint8Array(PREVIEW_W * PREVIEW_H * 4);
   const u8Alb = new Uint8Array(PREVIEW_W * PREVIEW_H * 4);
   const u8Tau = new Uint8Array(PREVIEW_W * PREVIEW_H * 4);
+  const u8WearPreview = new Uint8Array(PREVIEW_W * PREVIEW_H * 4);
+  const u8WearData = new Uint8Array(WEAR_MAP_TEX_W * WEAR_MAP_TEX_H);
 
   function updatePreview(): void {
     fillCrushMapRGBA(u8Crush, PREVIEW_W, PREVIEW_H, grassParams, FIELD_W, FIELD_H);
@@ -144,6 +151,20 @@ export function buildCrushMapGui(
     fillBladeTauMapData(u8Tau, PREVIEW_W, PREVIEW_H, grassParams);
     albPrev.put(u8Alb);
     tauPrev.put(u8Tau);
+
+    fillWearMap(u8WearData, WEAR_MAP_TEX_W, WEAR_MAP_TEX_H, grassParams, FIELD_W, FIELD_H);
+    for (let j = 0; j < PREVIEW_H; j++) {
+      const srcJ = Math.floor(j * WEAR_MAP_TEX_H / PREVIEW_H);
+      for (let i = 0; i < PREVIEW_W; i++) {
+        const srcI = Math.floor(i * WEAR_MAP_TEX_W / PREVIEW_W);
+        const val = u8WearData[srcJ * WEAR_MAP_TEX_W + srcI];
+        const o = (j * PREVIEW_W + i) * 4;
+        u8WearPreview[o] = val;
+        u8WearPreview[o+1] = val;
+        u8WearPreview[o+2] = val;
+      }
+    }
+    wearPrev.put(u8WearPreview);
   }
 
   const gui = new GUI({
@@ -310,6 +331,36 @@ export function buildCrushMapGui(
     'Blade transmittance tau_leaf, blue channel.\n' + 'PROSPECT: about 0.010.',
   );
 
+  tip(
+    leafMaps.add(grassParams, 'maskTilingEnabled').name('Tile mask').onChange(() => {
+      refreshMaskTilingControls();
+      onChange();
+    }),
+    'If enabled, scales the UVs for the grayscale mask to repeat it across the field.',
+  );
+  
+  const cMaskTileX = tip(
+    leafMaps.add(grassParams, 'maskTileX', 0.1, 100.0, 0.1).name('Tile X').onChange(onChange),
+    'Number of times the mask repeats along the pitch length.',
+  );
+  
+  const cMaskTileY = tip(
+    leafMaps.add(grassParams, 'maskTileY', 0.1, 100.0, 0.1).name('Tile Y').onChange(onChange),
+    'Number of times the mask repeats along the pitch width.',
+  );
+  
+  tip(
+    leafMaps.add(grassParams, 'maskContrast', 0.0, 5.0, 0.05).name('Mask contrast').onChange(onChange),
+    'Strength/contrast of the mask. 0 = no effect (white), 1 = original, >1 = darker shadows.',
+  );
+  
+  function refreshMaskTilingControls(): void {
+    const on = grassParams.maskTilingEnabled;
+    setEnabled(cMaskTileX, on);
+    setEnabled(cMaskTileY, on);
+  }
+  refreshMaskTilingControls();
+
   const maskBlock = document.createElement('div');
   maskBlock.style.padding = '4px 0 2px 0';
   maskBlock.style.boxSizing = 'border-box';
@@ -377,8 +428,8 @@ export function buildCrushMapGui(
       url,
       (tex) => {
         tex.colorSpace = THREE.NoColorSpace;
-        tex.wrapS = THREE.ClampToEdgeWrapping;
-        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
         tex.flipY = false;
         tex.generateMipmaps = true;
         tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -437,6 +488,25 @@ export function buildCrushMapGui(
   mowing.close();
   tramp.close();
   leafMaps.close();
+
+  const wear = gui.addFolder('Wear Zones');
+  tip(
+    wear.add(grassParams, 'laiBase', 0.5, 8.0, 0.1).name('Base LAI').onChange(onChange),
+    'Leaf Area Index for healthy grass.',
+  );
+  tip(
+    wear.add(grassParams, 'laiWear', 0.1, 5.0, 0.1).name('Wear LAI').onChange(onChange),
+    'Leaf Area Index for heavily worn grass (goalkeeper spot, center circle).',
+  );
+  tip(
+    wear.add(grassParams, 'wearCenterStrength', 0.0, 1.0, 0.01).name('Center wear').onChange(onChange),
+    'Intensity of trampling/wear around the center circle.',
+  );
+  tip(
+    wear.add(grassParams, 'wearGoalStrength', 0.0, 1.0, 0.01).name('Goal wear').onChange(onChange),
+    'Intensity of trampling/wear around the goal areas.',
+  );
+  wear.close();
 
   const markings = gui.addFolder('Field markings');
   tip(

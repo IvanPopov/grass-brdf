@@ -276,7 +276,7 @@ function ambientMultiplierFromMS(grass: GrassBRDFParams): number {
   const chi = grass.chiLAD;
   const M = campbellM(chi);
   const G = campbellG(1.0, chi, M);
-  const lai = grass.lai;
+  const lai = grass.laiBase;
   const Pgap = Math.exp(-(G * lai) / 1.0);
   const PgapAvg = Pgap;
   const G_eff = G;
@@ -573,7 +573,7 @@ export class GrassBRDFPatchView {
     colorTempK: number,
   ): void {
     const key = JSON.stringify({
-      lai: grass.lai,
+      lai: grass.laiBase,
       chi: grass.chiLAD,
       bh:  grass.bladeHeightM,
       bw:  grass.bladeWidthM,
@@ -604,7 +604,7 @@ export class GrassBRDFPatchView {
 
     const patchArea = GRASS_PATCH_SIZE_M * GRASS_PATCH_SIZE_M;
     const bladeOneSidedArea = Math.max(1e-6, grass.bladeHeightM * grass.bladeWidthM);
-    let n = Math.round((grass.lai * patchArea) / bladeOneSidedArea);
+    let n = Math.round((grass.laiBase * patchArea) / bladeOneSidedArea);
     n = Math.max(12, Math.min(MAX_BLADES, n));
 
     const showMowHalves =

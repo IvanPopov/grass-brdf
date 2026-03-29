@@ -164,34 +164,19 @@ export interface GrassBRDFParams {
 
   /**
    * Leaf Area Index LAI [m² leaf / m² ground].
-   *
-   * Definition: total one-sided leaf area per unit ground area (Watson 1947).
-   *
-   * ── Measured values ──
-   * [Tegg04]: Lolium perenne maintained at 25 mm, irrigated:
-   *   LAI = 2.8 in early spring (March), 4.1 at peak growth (July).
-   *   Range for professional swards over season: 2.5–4.3.
-   *   Mean at match condition (May–Sep, 25–30 mm cut): 3.2–3.7.
-   *
-   * [Jonc04] review Table 1: short-grass canopies (h < 50 mm):
-   *   Poa pratensis:      LAI = 2.0–3.5
-   *   Festuca rubra:      LAI = 2.8–4.2
-   *   Lolium perenne:     LAI = 2.5–4.5 (consistent with Tegg04)
-   *
-   * ── Shadertoy comparison ──
-   * [SH-ref] uses LAI = 5.6, which corresponds to an extremely dense or
-   * very late-season sward (e.g., overseeded artificial base in autumn).
-   * Effect on gap fraction at nadir (θ=0°):
-   *   Ours (LAI=3.5): Pgap = exp(−0.292×3.5) = 0.360 (36% soil visible)
-   *   Theirs (LAI=5.6): Pgap = exp(−0.292×5.6) = 0.195 (20% soil visible)
-   *   Difference: −44% visible soil → darker canopy at nadir, higher LAI is
-   *   unrealistic for a FIFA-maintained 27 mm pitch.
-   *
-   * ── Match to our default ──
-   * Our 3.5 = mid-point of Tegg04 in-season range (2.5–4.5).
-   * Match to median (3.2–3.7): within +5%.  Physically justified.
+   * Base value for healthy grass.
    */
-  lai: number;
+  laiBase: number;
+
+  /**
+   * Leaf Area Index LAI in highly worn areas.
+   */
+  laiWear: number;
+
+  /** Wear mask generation: strength of wear in the center circle. */
+  wearCenterStrength: number;
+  /** Wear mask generation: strength of wear in the goal areas. */
+  wearGoalStrength: number;
 
   /**
    * Ellipsoidal LAD parameter χ [dimensionless].
@@ -637,6 +622,14 @@ export interface GrassBRDFParams {
   markingsTransmittanceG: number;
   /** Paint transmittance B (linear sRGB) */
   markingsTransmittanceB: number;
+
+  // ---------------------------------------------------------------------------
+  // Grayscale Mask
+  // ---------------------------------------------------------------------------
+  maskTilingEnabled: boolean;
+  maskTileX: number;
+  maskTileY: number;
+  maskContrast: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -707,7 +700,10 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   grassBRDFMode: 1,
 
   // [Tegg04] mid-season mean for Lolium perenne, 25 mm cut, irrigated: 3.2–3.7
-  lai:          3.50,
+  laiBase:      3.50,
+  laiWear:      1.50,
+  wearCenterStrength: 0.6,
+  wearGoalStrength: 0.8,
 
   // [Jonc04] Table 2 centroid for Lolium perenne cultivars: 0.41–0.52
   chiLAD:       0.50,
@@ -782,4 +778,9 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   markingsTransmittanceR: 0.0,
   markingsTransmittanceG: 0.0,
   markingsTransmittanceB: 0.0,
+
+  maskTilingEnabled:     false,
+  maskTileX:             1.0,
+  maskTileY:             1.0,
+  maskContrast:          1.0,
 };

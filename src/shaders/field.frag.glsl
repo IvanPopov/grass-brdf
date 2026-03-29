@@ -32,7 +32,9 @@ uniform float isSurfaceGrass;
 // lai: Leaf Area Index [m²/m²].  chiLAD: Campbell ellipsoidal LAD parameter.
 // bladeRL: rL = bladeWidth / bladeHeight (hot-spot angular scale).
 // bladeCampbellMeanTiltRad: mean zenith [rad] from Campbell LAD (meadow specular).
-uniform float lai;
+uniform float laiBase;
+uniform float laiWear;
+uniform sampler2D wearMap;
 uniform float chiLAD;
 uniform float bladeRL;
 uniform float bladeHeightM;
@@ -60,6 +62,8 @@ uniform float microShadowIntensity;
 uniform sampler2D bladeAlbedoMap;
 uniform sampler2D bladeTauMap;
 uniform sampler2D bladeUserDetailMap;
+uniform vec2 maskTiling;
+uniform float maskContrast;
 uniform vec3 soilAlbedo;
 
 // ── Cuticle specular ─────────────────────────────────────────────────────────
@@ -429,6 +433,7 @@ vec3 evaluateGrassBRDF(
     vec3 N_blade,
     float E_raw,
     float M,
+    float currentLai,
     float variance,
     float w_dir,
     float microStampW,
@@ -447,8 +452,8 @@ vec3 evaluateGrassBRDF(
     // ── 1. Gap fractions ──────────────────────────────────────────────────────
     // P_gap: fraction of soil visible from each direction through the canopy.
     // Computed using [Camp90] G function with chiLAD and pre-computed M.
-    float Pgap_i = gapFraction(NdotL, lai, chiLAD, M);  // illumination path
-    float Pgap_v = gapFraction(NdotV, lai, chiLAD, M);  // view path
+    float Pgap_i = gapFraction(NdotL, currentLai, chiLAD, M);  // illumination path
+    float Pgap_v = gapFraction(NdotV, currentLai, chiLAD, M);  // view path
 
     // ── 2. Hot-spot factor ────────────────────────────────────────────────────
     // Peak at retroreflection (L ≈ V); angular scale ∝ rL = bladeWidth/bladeHeight.
@@ -476,7 +481,7 @@ vec3 evaluateGrassBRDF(
 
     float k_i = G_i / NdotL;
     float k_v = G_v / NdotV;
-    float T_att = 1.0 - exp(-(k_i + k_v) * lai);
+    float T_att = 1.0 - exp(-(k_i + k_v) * currentLai);
 
     float denom_ss = 4.0 * (G_i * NdotV + G_v * NdotL);
 
@@ -674,6 +679,10 @@ void main() {
         float M = campbellM(chiLAD);
 
         vec2 mapUv = vec2(vWorldPos.x / fieldSize.x + 0.5, vWorldPos.z / fieldSize.y + 0.5);
+        
+        float wear = texture(wearMap, mapUv).r;
+        float currentLai = mix(laiBase, laiWear, wear);
+
         vec4 crush = sampleCrushMapRgbLinearANearest(crushMap, mapUv);
         float w_map = clamp(crush.r, 0.0, 1.0);
         float coherence = clamp(crush.g, 0.0, 1.0);
@@ -682,7 +691,9 @@ void main() {
         float wStampMicro = texture(trampStampMap, mapUv).r;
         vec3 albBase = texture(bladeAlbedoMap, mapUv).rgb;
         vec3 tauBase = texture(bladeTauMap, mapUv).rgb;
-        float bladeMask = texture(bladeUserDetailMap, mapUv).r;
+        float bladeMask = texture(bladeUserDetailMap, mapUv * maskTiling).r;
+        // Contrast for a multiplier mask: pivot around 1.0 (white = neutral/no-change).
+        bladeMask = clamp(1.0 + (bladeMask - 1.0) * maskContrast, 0.0, 1.0);
         vec3 bladeAlbedoLeaf = albBase * bladeMask;
         vec3 bladeTauLeaf = tauBase * bladeMask;
 
@@ -711,6 +722,7 @@ void main() {
                 N_blade,
                 E_raw,
                 M,
+                currentLai,
                 variance,
                 coherence,
                 wStampMicro,

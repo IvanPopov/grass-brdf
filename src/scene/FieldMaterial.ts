@@ -154,7 +154,9 @@ export class FieldMaterial {
       grassBRDFMode: { value: 0.0 },
 
       // Canopy structure
-      lai:          { value: 3.5 },
+      wearMap:    { value: FieldMaterial.getBlackTrampStampTexture() }, // Placeholder 1x1 black
+      laiBase:      { value: 3.5 },
+      laiWear:      { value: 1.5 },
       chiLAD:       { value: 0.5 },
       bladeRL:      { value: 0.004 / 0.027 }, // bladeWidthM / bladeHeightM
       bladeHeightM: { value: 0.027 },
@@ -166,6 +168,8 @@ export class FieldMaterial {
       bladeAlbedoMap: { value: FieldMaterial.makePlaceholderBladeAlbedoMap() },
       bladeTauMap:    { value: FieldMaterial.makePlaceholderBladeTauMap() },
       bladeUserDetailMap: { value: FieldMaterial.getWhiteBladeDetailMap() },
+      maskTiling: { value: new THREE.Vector2(1.0, 1.0) },
+      maskContrast: { value: 1.0 },
       fieldSize:   { value: new THREE.Vector2(FIELD_W, FIELD_H) },
       mowMaxTiltRad: { value: 70.0 * Math.PI / 180.0 },
 
@@ -191,8 +195,13 @@ export class FieldMaterial {
   }
 
   /** CPU trampling footprint weights (R8). Use black 1x1 when GPU procedural crush is active. */
+  /** CPU trampling footprint weights (R8). Use black 1x1 when GPU procedural crush is active. */
   setTrampStampTexture(tex: THREE.Texture): void {
     this.uniforms['trampStampMap'].value = tex;
+  }
+
+  setWearMapTexture(tex: THREE.Texture): void {
+    this.uniforms['wearMap'].value = tex;
   }
 
   setBladeAlbedoMapTexture(tex: THREE.Texture): void {
@@ -307,7 +316,8 @@ export class FieldMaterial {
     (u['cameraPos'].value as THREE.Vector3).copy(cameraWorldPos);
     u['grassBRDFMode'].value    = p.grassBRDFMode;
 
-    u['lai'].value              = p.lai;
+    u['laiBase'].value              = p.laiBase;
+    u['laiWear'].value              = p.laiWear;
     u['chiLAD'].value           = p.chiLAD;
     u['bladeRL'].value          = p.bladeWidthM / p.bladeHeightM;
     u['bladeHeightM'].value     = p.bladeHeightM;
@@ -332,5 +342,13 @@ export class FieldMaterial {
     u['dbgMicroShadow'].value = dbg.dbgMicroShadow ? 1.0 : 0.0;
 
     u['microShadowIntensity'].value = p.microShadowIntensity;
+    
+    if (p.maskTilingEnabled) {
+      (u['maskTiling'].value as THREE.Vector2).set(p.maskTileX, p.maskTileY);
+    } else {
+      (u['maskTiling'].value as THREE.Vector2).set(1.0, 1.0);
+    }
+    
+    u['maskContrast'].value = p.maskContrast;
   }
 }

@@ -289,8 +289,8 @@ export function buildGui(
   canopy.close();
 
   tip(
-    canopy.add(grassParams, 'lai', 0.5, 8.0, 0.1)
-      .name('LAI  [m²/m²]')
+    canopy.add(grassParams, 'laiBase', 0.5, 8.0, 0.1)
+      .name('LAI Base [m²/m²]')
       .onChange(onGrassChange),
     'Leaf Area Index: one-sided leaf area per unit ground area.\n' +
     'Professional Lolium perenne pitch: 2.5–4.0  [Tegg & Lane 2004].\n' +

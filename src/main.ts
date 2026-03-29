@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import { DEFAULT_PARAMS, LightRigParams } from './config';
+import { DEFAULT_PARAMS, LightRigParams, FIELD_W, FIELD_H } from './config';
 import { LightRig, computeGroupPhysics } from './lighting/LightRig';
 import { LightRigVisual } from './lighting/LightRigVisual';
 import { createField } from './scene/Field';
@@ -32,6 +32,7 @@ import {
   createTrampStampDataTexture,
   updateCrushMapDataTexture,
 } from './crushMap/crushMap';
+import { createWearMapDataTexture, fillWearMap, WEAR_MAP_TEX_W, WEAR_MAP_TEX_H } from './crushMap/wearMap';
 import { buildCrushMapGui } from './ui/crushMapGui';
 
 // ── Parameters ────────────────────────────────────────────────────────────────
@@ -51,6 +52,7 @@ grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
 const crushMapGpu = new CrushMapGpu();
 const crushMapCpuTex = createCrushMapDataTexture();
 const trampStampCpuTex = createTrampStampDataTexture();
+const wearMapTex = createWearMapDataTexture();
 const bladeAlbedoMapTex = createBladeAlbedoMapTexture();
 const bladeTauMapTex = createBladeTauMapTexture();
 
@@ -135,6 +137,11 @@ let crushMapGuiHandle: ReturnType<typeof buildCrushMapGui>;
 function onGrassChange(): void {
   crushMapGuiHandle?.updatePreview();
   updateBladeOpticalDataTextures(bladeAlbedoMapTex, bladeTauMapTex, grassParams);
+  
+  fillWearMap(wearMapTex.image.data as Uint8Array, WEAR_MAP_TEX_W, WEAR_MAP_TEX_H, grassParams, FIELD_W, FIELD_H);
+  wearMapTex.needsUpdate = true;
+  fieldMat.setWearMapTexture(wearMapTex);
+
   fieldMat.setBladeAlbedoMapTexture(bladeAlbedoMapTex);
   fieldMat.setBladeTauMapTexture(bladeTauMapTex);
   if (grassParams.trampEnabled) {
