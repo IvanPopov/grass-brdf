@@ -50,6 +50,8 @@ const _worldUp = new THREE.Vector3(0, 1, 0);
 const _ehPoint = new THREE.Vector3(0, 0, 0);
 const _patchFwd = new THREE.Vector3();
 const _patchLookAt = new THREE.Vector3(0, 0.01, 0);
+/** Lamina mid-height offset: projection of world +Y onto blade plane (not field T or B). */
+const _bladeUp = new THREE.Vector3();
 
 /** Distance from patch look-at point to camera [m]. */
 const PATCH_CAMERA_DISTANCE_M = 0.52;
@@ -167,37 +169,10 @@ function bladeNormalMeadow(out: THREE.Vector3, thetaRad: number, psiRad: number)
 }
 
 /**
- * Mowing/stadium normal: mower travels in X, stripes run in X indexed by Z.
- * On the small patch patchHalfMow splits front/back in Z so both lean directions
- * are visible simultaneously.
- */
-function bladeNormalMowed(
-  out: THREE.Vector3,
-  lx: number,
-  tiltRad: number,
-  stripeWidthM: number,
-  stripesEnabled: boolean,
-  patchHalfMow: boolean,
-): THREE.Vector3 {
-  if (!stripesEnabled) {
-    return out.set(0, Math.cos(tiltRad), Math.sin(tiltRad));
-  }
-  let leanSign: number;
-  if (patchHalfMow) {
-    leanSign = lx < 0 ? -1 : 1;
-  } else {
-    const stripeIdx = Math.floor(lx / stripeWidthM);
-    const stripeParity = ((stripeIdx % 2) + 2) % 2;
-    leanSign = stripeParity === 0 ? -1 : 1;
-  }
-  return out.set(0, Math.cos(tiltRad), leanSign * Math.sin(tiltRad));
-}
-
-/**
- * Box local +X = face outward normal, +Y = lamina height (root to tip). Build an
- * orthonormal basis so blade long axis is the projection of world +Y onto the leaf
- * plane (blade grows upward, not into the soil). setFromUnitVectors(+X, n) alone
- * leaves arbitrary twist and often flips +Y below the ground.
+ * Meadow / no directional weight: lamina long axis = projection of world +Y onto the leaf plane,
+ * width = cross(N, long). Instance basis columns (N, long, wide) so local +X maps to face normal N.
+ * PlaneGeometry must be pre-rotated by rotateY(pi/2) so vertex normals (local +Z after default) align
+ * with that +X axis; otherwise blades appear horizontal in the ground plane.
  */
 function orientationFromFaceNormal(q: THREE.Quaternion, nRaw: THREE.Vector3): void {
   _faceN.copy(nRaw).normalize();
@@ -217,6 +192,78 @@ function orientationFromFaceNormal(q: THREE.Quaternion, nRaw: THREE.Vector3): vo
   _bladeWide.crossVectors(_faceN, _bladeLong).normalize();
   _matBasis.makeBasis(_faceN, _bladeLong, _bladeWide);
   q.setFromRotationMatrix(_matBasis);
+}
+
+/**
+ * Lamina quad: local +Z is face normal before rotateY(pi/2); after rotation +X is N for orientationFromFaceNormal.
+ */
+function makeBladeQuadGeometry(widthM: number, heightM: number): THREE.BufferGeometry {
+  const g = new THREE.PlaneGeometry(widthM, heightM);
+  g.rotateY(Math.PI / 2);
+  g.computeTangents();
+  return g;
+}
+
+/**
+ * field.frag.glsl: w=0 uses isotropic a_mean; w>0 uses anisotropic GGX in mow T/B frame.
+ * Mesh tangent space follows growth (orientationFromFaceNormal), not mow T/B, so mowed patch specular
+ * streak direction is only a rough match to the field until per-instance tangent or custom shader.
+ */
+function applyPhysicalGrassBladeMaterial(
+  bm: THREE.MeshPhysicalMaterial,
+  grass: GrassBRDFParams,
+  wDir: number,
+): void {
+  if (wDir <= 1e-5) {
+    const aMean = (grass.alphaT + grass.alphaB) * 0.5;
+    bm.roughness = Math.sqrt(THREE.MathUtils.clamp(aMean, 0.001, 1.0));
+    bm.anisotropy = 0;
+  } else {
+    const aLo = Math.min(grass.alphaT, grass.alphaB);
+    const aHi = Math.max(grass.alphaT, grass.alphaB);
+    const r2 = THREE.MathUtils.clamp(aLo, 0.001, 0.999);
+    bm.roughness = Math.sqrt(r2);
+    bm.anisotropy =
+      aHi <= r2 + 1e-7
+        ? 0
+        : Math.sqrt(THREE.MathUtils.clamp((aHi - r2) / (1.0 - r2), 0, 1));
+  }
+  bm.anisotropyRotation = 0;
+  const sqF0 = Math.sqrt(THREE.MathUtils.clamp(grass.bladeCuticleF0, 0.0, 0.99));
+  bm.ior = (1.0 + sqF0) / (1.0 - sqF0);
+  bm.metalness = 0.0;
+}
+
+/** World +Y projected onto plane perpendicular to blade face normal; lamina mid-height offset direction. */
+function bladeUpAlongLeaf(out: THREE.Vector3, nBlade: THREE.Vector3): void {
+  out.copy(_worldUp).addScaledVector(nBlade, -_worldUp.dot(nBlade));
+  if (out.lengthSq() < 1e-14) {
+    out.set(0, 1, 0);
+  }
+  out.normalize();
+}
+
+function mowingLeanSign(
+  lx: number,
+  stripeWidthM: number,
+  patchHalfMow: boolean,
+  stripesEnabled: boolean,
+): number {
+  if (!stripesEnabled) {
+    return 1;
+  }
+  if (patchHalfMow) {
+    return lx < 0 ? -1 : 1;
+  }
+  const stripeIdx = Math.floor(lx / stripeWidthM);
+  return (((stripeIdx % 2) + 2) % 2) === 0 ? -1 : 1;
+}
+
+function shortestAngleDelta(fromRad: number, toRad: number): number {
+  let d = toRad - fromRad;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
 
 function linearAlbedoToColor(
@@ -253,7 +300,8 @@ function ambientMultiplierFromMS(grass: GrassBRDFParams): number {
 /**
  * Independent Three.js scene: 25 cm turf patch with instanced blades driven by
  * GrassBRDFParams. Rendered in the lower-left corner via scissor (same renderer
- * as the stadium). Uses MeshStandardMaterial (GGX + diffuse). Ground uses soil
+ * as the stadium). Blades use MeshPhysicalMaterial (anisotropic GGX, IOR from F0).
+ * Ground uses soil
  * albedo; blades use leaf albedo. Directional light intensity is scaled from
  * horizontal illuminance at field centre (sampleEh), split evenly between two
  * cornice SpotLights on +/-Z (across pitch width), both casting shadows.
@@ -324,11 +372,12 @@ export class GrassBRDFPatchView {
     this.scene.add(this.groundLeft);
     this.scene.add(this.groundRight);
 
-    const bladeGeo = new THREE.BoxGeometry(0.0008, 0.03, 0.004);
-    bladeGeo.translate(0, 0.015, 0);
-    const bladeMat = new THREE.MeshStandardMaterial({
+    const bladeGeo = makeBladeQuadGeometry(0.004, 0.03);
+    const bladeMat = new THREE.MeshPhysicalMaterial({
       roughness:       0.55,
       metalness:       0.0,
+      ior:             1.4,
+      anisotropy:      0.0,
       envMapIntensity: 0.0,
       toneMapped:      true,
       side:            THREE.DoubleSide,
@@ -579,16 +628,13 @@ export class GrassBRDFPatchView {
       matR.roughness = 0.95;
     }
 
-    const bm = this.instancedBlades.material as THREE.MeshStandardMaterial;
+    const bm = this.instancedBlades.material as THREE.MeshPhysicalMaterial;
     linearAlbedoToColor(grass.bladeAlbedoR, grass.bladeAlbedoG, grass.bladeAlbedoB, bm.color);
-    bm.roughness = THREE.MathUtils.clamp((grass.alphaT + grass.alphaB) * 0.5, 0.04, 1.0);
-    bm.metalness = grass.bladeCuticleF0 * 0.15;
+    applyPhysicalGrassBladeMaterial(bm, grass, wDir);
 
-    const thick = Math.max(0.0002, grass.bladeWidthM * 0.12);
-    // Large faces must have normals +/- X so setFromUnitVectors(+X, N_blade) shows the leaf face.
-    // Order: (thin X, height Y, width Z) = (thickness, bladeHeight, bladeWidth).
-    const newGeo = new THREE.BoxGeometry(thick, grass.bladeHeightM, grass.bladeWidthM);
-    newGeo.translate(0, grass.bladeHeightM * 0.5, 0);
+    const w = Math.max(1e-4, grass.bladeWidthM);
+    const h = Math.max(1e-4, grass.bladeHeightM);
+    const newGeo = makeBladeQuadGeometry(w, h);
     this.instancedBlades.geometry.dispose();
     this.instancedBlades.geometry = newGeo;
 
@@ -612,38 +658,20 @@ export class GrassBRDFPatchView {
 
         const thetaCamp = sampleZenithFromCampbell(chi, rnd);
         const psi = rnd() * Math.PI * 2;
-        
-        // Determine mowing stripe lean sign
-        let leanSign = 1;
-        if (grass.mowingStripesEnabled) {
-          if (patchHalfMow) {
-            leanSign = lx < 0 ? -1 : 1;
-          } else {
-            const stripeIdx = Math.floor(lx / patchStripeW);
-            leanSign = (((stripeIdx % 2) + 2) % 2) === 0 ? -1 : 1;
-          }
-        }
 
-        // Mowed azimuth corresponds to leanSign
-        // leanSign =  1 -> +Z -> psi = -pi/2
-        // leanSign = -1 -> -Z -> psi = +pi/2
+        const leanSign = mowingLeanSign(lx, patchStripeW, patchHalfMow, grass.mowingStripesEnabled);
         const mowedPsi = -leanSign * Math.PI / 2;
-
-        // Shortest path interpolation for azimuth
-        let dPsi = mowedPsi - psi;
-        while (dPsi > Math.PI) dPsi -= Math.PI * 2;
-        while (dPsi < -Math.PI) dPsi += Math.PI * 2;
-        
-        const finalPsi = psi + dPsi * wDir;
+        const finalPsi = psi + shortestAngleDelta(psi, mowedPsi) * wDir;
         const finalTheta = THREE.MathUtils.lerp(thetaCamp, tiltMowRad, wDir);
 
-        // Generate final perfectly spherical normal (no vector length loss!)
         bladeNormalMeadow(_nBlade, finalTheta, finalPsi);
 
-        // Convert face normal to instance orientation (keeping +Y up)
+        bladeUpAlongLeaf(_bladeUp, _nBlade);
+        _tmpV.set(lx, 0, lz).addScaledVector(_bladeUp, grass.bladeHeightM * 0.5);
+
         orientationFromFaceNormal(_tmpQ, _nBlade);
 
-        _tmpM.compose(_tmpV.set(lx, 0, lz), _tmpQ, _bladeScale);
+        _tmpM.compose(_tmpV, _tmpQ, _bladeScale);
         this.instancedBlades.setMatrixAt(i, _tmpM);
       }
     }
