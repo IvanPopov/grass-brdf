@@ -40,6 +40,63 @@ export class FieldMaterial {
   /** Shared 1x1 black R8: micro-occlusion uses stamp texture; GPU crush has no footprints. */
   private static blackTrampStampTex: THREE.DataTexture | null = null;
 
+  private static makePlaceholderBladeAlbedoMap(): THREE.DataTexture {
+    const d = new Uint8Array([
+      Math.round(0.045 * 255),
+      Math.round(0.115 * 255),
+      Math.round(0.025 * 255),
+      255,
+    ]);
+    const t = new THREE.DataTexture(d, 1, 1, THREE.RGBAFormat);
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = 1;
+    t.needsUpdate = true;
+    t.flipY = false;
+    t.colorSpace = THREE.NoColorSpace;
+    return t;
+  }
+
+  private static makePlaceholderBladeTauMap(): THREE.DataTexture {
+    const d = new Uint8Array([
+      Math.round(0.015 * 255),
+      Math.round(0.045 * 255),
+      Math.round(0.010 * 255),
+      255,
+    ]);
+    const t = new THREE.DataTexture(d, 1, 1, THREE.RGBAFormat);
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = 1;
+    t.needsUpdate = true;
+    t.flipY = false;
+    t.colorSpace = THREE.NoColorSpace;
+    return t;
+  }
+
+  /** 1x1 white sRGB: identity multiplier for bladeUserDetailMap when no file is loaded. */
+  private static whiteBladeDetailMap: THREE.DataTexture | null = null;
+
+  static getWhiteBladeDetailMap(): THREE.DataTexture {
+    if (FieldMaterial.whiteBladeDetailMap === null) {
+      const d = new Uint8Array([255, 255, 255, 255]);
+      const t = new THREE.DataTexture(d, 1, 1, THREE.RGBAFormat);
+      t.generateMipmaps = false;
+      t.minFilter = THREE.LinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.wrapS = THREE.ClampToEdgeWrapping;
+      t.wrapT = THREE.ClampToEdgeWrapping;
+      t.anisotropy = 1;
+      t.needsUpdate = true;
+      t.flipY = false;
+      t.colorSpace = THREE.NoColorSpace;
+      FieldMaterial.whiteBladeDetailMap = t;
+    }
+    return FieldMaterial.whiteBladeDetailMap;
+  }
+
   static getBlackTrampStampTexture(): THREE.DataTexture {
     if (FieldMaterial.blackTrampStampTex === null) {
       const d = new Uint8Array([0]);
@@ -106,14 +163,14 @@ export class FieldMaterial {
 
       crushMap:   { value: FieldMaterial.makePlaceholderCrushMap() },
       trampStampMap: { value: FieldMaterial.getBlackTrampStampTexture() },
+      bladeAlbedoMap: { value: FieldMaterial.makePlaceholderBladeAlbedoMap() },
+      bladeTauMap:    { value: FieldMaterial.makePlaceholderBladeTauMap() },
+      bladeUserDetailMap: { value: FieldMaterial.getWhiteBladeDetailMap() },
       fieldSize:   { value: new THREE.Vector2(FIELD_W, FIELD_H) },
       mowMaxTiltRad: { value: 70.0 * Math.PI / 180.0 },
 
       microShadowIntensity: { value: 0.95 },
 
-      // Leaf optical properties (linear sRGB)
-      bladeAlbedo: { value: new THREE.Vector3(0.045, 0.115, 0.025) },
-      bladeTau:    { value: new THREE.Vector3(0.015, 0.045, 0.010) },
       soilAlbedo:  { value: new THREE.Vector3(0.090, 0.075, 0.050) },
 
       // Cuticle specular
@@ -130,20 +187,32 @@ export class FieldMaterial {
   }
 
   setCrushMapTexture(tex: THREE.Texture): void {
-    tex.anisotropy = 1;
-    tex.generateMipmaps = false;
-    tex.minFilter = THREE.LinearFilter;
-    tex.magFilter = THREE.LinearFilter;
     this.uniforms['crushMap'].value = tex;
   }
 
   /** CPU trampling footprint weights (R8). Use black 1x1 when GPU procedural crush is active. */
   setTrampStampTexture(tex: THREE.Texture): void {
-    tex.anisotropy = 1;
-    tex.generateMipmaps = false;
-    tex.minFilter = THREE.LinearFilter;
-    tex.magFilter = THREE.LinearFilter;
     this.uniforms['trampStampMap'].value = tex;
+  }
+
+  setBladeAlbedoMapTexture(tex: THREE.Texture): void {
+    this.uniforms['bladeAlbedoMap'].value = tex;
+  }
+
+  setBladeTauMapTexture(tex: THREE.Texture): void {
+    this.uniforms['bladeTauMap'].value = tex;
+  }
+
+  /**
+   * Optional grayscale mask from disk: R channel multiplies blade albedo and tau (same factor).
+   * Pass null to use identity (white 1x1).
+   */
+  setBladeUserDetailMapTexture(tex: THREE.Texture | null): void {
+    if (tex === null) {
+      this.uniforms['bladeUserDetailMap'].value = FieldMaterial.getWhiteBladeDetailMap();
+      return;
+    }
+    this.uniforms['bladeUserDetailMap'].value = tex;
   }
 
   /**
@@ -250,12 +319,6 @@ export class FieldMaterial {
     u['bladeCampbellMeanTiltRad'].value = this.cachedMeanZenithRad;
     u['mowMaxTiltRad'].value            = p.mowMaxTiltDeg * Math.PI / 180.0;
     (u['fieldSize'].value as THREE.Vector2).set(FIELD_W, FIELD_H);
-
-    const ba = u['bladeAlbedo'].value as THREE.Vector3;
-    ba.set(p.bladeAlbedoR, p.bladeAlbedoG, p.bladeAlbedoB);
-
-    const bt = u['bladeTau'].value as THREE.Vector3;
-    bt.set(p.bladeTransmittanceR, p.bladeTransmittanceG, p.bladeTransmittanceB);
 
     const sa = u['soilAlbedo'].value as THREE.Vector3;
     sa.set(p.soilAlbedoR, p.soilAlbedoG, p.soilAlbedoB);

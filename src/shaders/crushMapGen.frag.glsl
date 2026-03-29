@@ -19,9 +19,15 @@ out vec4 fragColor;
 void main() {
   vec2 worldXZ = (vUv - 0.5) * vec2(fieldW, fieldH);
   float worldX = worldXZ.x;
+  float worldZ = worldXZ.y;
+
+  float edgeNoise = (sin(worldZ * 18.3 + worldX * 3.0) * 0.5 + 
+                     sin(worldZ * 29.1 - worldX * 2.0) * 0.3 + 
+                     sin(worldZ * 9.7) * 0.7) * 0.08;
+  float noisyX = worldX + edgeNoise;
 
   float sw = max(mowArtStripeWidthM, 0.01);
-  float stripeIdx = floor(worldX / sw);
+  float stripeIdx = floor(noisyX / sw);
   float alt = mod(stripeIdx, 2.0) < 1.0 ? -1.0 : 1.0;
   float leanStriped = mix(1.0, alt, mowArtStripesEnabled);
   float stripePhase = mowArtStripesEnabled > 0.5
@@ -32,7 +38,13 @@ void main() {
   float leanSign = mix(1.0, leanStriped, step(0.5, mowArtMowingEnabled));
   float rMod = mix(1.0, rModStriped, step(0.5, mowArtMowingEnabled));
 
-  float R = clamp(mowBend * rMod, 0.0, 1.0);
+  float localX = mod(noisyX, sw);
+  float distToEdge = min(localX, sw - localX);
+  
+  float edgeCrushRaw = max(0.0, 1.0 - distToEdge / 0.4);
+  float edgeCrush = edgeCrushRaw * edgeCrushRaw * (3.0 - 2.0 * edgeCrushRaw) * 0.06;
+
+  float R = clamp(mowBend * rMod + edgeCrush * step(0.5, mowArtMowingEnabled), 0.0, 1.0);
   float G = clamp(mowCoherence, 0.0, 1.0);
   float B = clamp(mowSpread, 0.0, 1.0);
   float A = leanSign * 0.5 + 0.5;

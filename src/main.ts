@@ -23,6 +23,11 @@ import {
 import { GrassBRDFPatchView } from './debug/GrassBRDFPatchView';
 import { CrushMapGpu } from './crushMap/CrushMapGpu';
 import {
+  createBladeAlbedoMapTexture,
+  createBladeTauMapTexture,
+  updateBladeOpticalDataTextures,
+} from './crushMap/bladeOpticalMaps';
+import {
   createCrushMapDataTexture,
   createTrampStampDataTexture,
   updateCrushMapDataTexture,
@@ -46,6 +51,20 @@ grassPatchView.setScreenSize(window.innerWidth, window.innerHeight);
 const crushMapGpu = new CrushMapGpu();
 const crushMapCpuTex = createCrushMapDataTexture();
 const trampStampCpuTex = createTrampStampDataTexture();
+const bladeAlbedoMapTex = createBladeAlbedoMapTexture();
+const bladeTauMapTex = createBladeTauMapTexture();
+
+let userBladeDetailGpu: THREE.Texture | null = null;
+function onBladeDetailMapChange(tex: THREE.Texture | null): void {
+  if (userBladeDetailGpu) {
+    userBladeDetailGpu.dispose();
+    userBladeDetailGpu = null;
+  }
+  if (tex) {
+    userBladeDetailGpu = tex;
+  }
+  fieldMat.setBladeUserDetailMapTexture(tex);
+}
 
 // ── WebGL renderer ────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -115,6 +134,9 @@ let crushMapGuiHandle: ReturnType<typeof buildCrushMapGui>;
 
 function onGrassChange(): void {
   crushMapGuiHandle?.updatePreview();
+  updateBladeOpticalDataTextures(bladeAlbedoMapTex, bladeTauMapTex, grassParams);
+  fieldMat.setBladeAlbedoMapTexture(bladeAlbedoMapTex);
+  fieldMat.setBladeTauMapTexture(bladeTauMapTex);
   if (grassParams.trampEnabled) {
     updateCrushMapDataTexture(crushMapCpuTex, trampStampCpuTex, grassParams);
     fieldMat.setCrushMapTexture(crushMapCpuTex);
@@ -138,7 +160,9 @@ const { gui, updateComputedDisplay } = buildGui(
   onGrassChange,
 );
 
-crushMapGuiHandle = buildCrushMapGui(grassParams, onGrassChange);
+crushMapGuiHandle = buildCrushMapGui(grassParams, onGrassChange, {
+  onBladeDetailMapChange: onBladeDetailMapChange,
+});
 document.body.appendChild(crushMapGuiHandle.host);
 Object.assign(crushMapGuiHandle.host.style, {
   position:   'fixed',
@@ -177,6 +201,101 @@ renderFolder.add(renderParams, 'exposure', 0.0001, 0.02, 0.0001)
   .name('Exposure')
   .onChange((v: number) => { renderer.toneMappingExposure = v; });
 renderFolder.open();
+
+// ── Presets ───────────────────────────────────────────────────────────────────
+interface PresetData {
+  params: LightRigParams;
+  grassParams: GrassBRDFParams;
+  grassDebug: GrassBRDFDebug;
+  patchDebug: GrassPatchDebug;
+  exposure: number;
+  maskData: { name: string; url: string } | null;
+}
+
+const STORAGE_KEY = 'grass_brdf_presets';
+let savedPresets: Record<string, PresetData> = {};
+try {
+  const data = localStorage.getItem(STORAGE_KEY);
+  if (data) savedPresets = JSON.parse(data);
+} catch (e) {
+  console.warn('Failed to load presets', e);
+}
+
+const presetState = {
+  currentPreset: Object.keys(savedPresets)[0] || '',
+  presetName: 'My Preset',
+  save: () => {
+    if (!presetState.presetName.trim()) return;
+    const name = presetState.presetName.trim();
+    const data: PresetData = {
+      params: JSON.parse(JSON.stringify(params)),
+      grassParams: JSON.parse(JSON.stringify(grassParams)),
+      grassDebug: JSON.parse(JSON.stringify(grassDebug)),
+      patchDebug: JSON.parse(JSON.stringify(patchDebug)),
+      exposure: renderParams.exposure,
+      maskData: crushMapGuiHandle.getMaskDataUrl(),
+    };
+    try {
+      savedPresets[name] = data;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets));
+      updatePresetDropdown();
+      presetState.currentPreset = name;
+      presetController.updateDisplay();
+    } catch (e) {
+      alert('Failed to save preset. Texture might be too large for localStorage.');
+    }
+  },
+  load: () => {
+    const data = savedPresets[presetState.currentPreset];
+    if (!data) return;
+    
+    Object.assign(params, data.params);
+    Object.assign(grassParams, data.grassParams);
+    Object.assign(grassDebug, data.grassDebug);
+    Object.assign(patchDebug, data.patchDebug);
+    
+    renderParams.exposure = data.exposure;
+    renderer.toneMappingExposure = data.exposure;
+    
+    crushMapGuiHandle.loadMaskDataUrl(data.maskData);
+    
+    gui.controllersRecursive().forEach(c => c.updateDisplay());
+    crushMapGuiHandle.gui.controllersRecursive().forEach(c => c.updateDisplay());
+    
+    rebuild();
+  },
+  delete: () => {
+    if (!savedPresets[presetState.currentPreset]) return;
+    delete savedPresets[presetState.currentPreset];
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets));
+      updatePresetDropdown();
+      presetState.currentPreset = Object.keys(savedPresets)[0] || '';
+      presetController.updateDisplay();
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+};
+
+const presetsFolder = gui.addFolder('Presets');
+let presetController = presetsFolder.add(presetState, 'currentPreset', Object.keys(savedPresets)).name('Select Preset');
+
+function updatePresetDropdown() {
+  const options = Object.keys(savedPresets);
+  // Recreate the controller to update the options dropdown properly in lil-gui
+  const parent = presetController.parent;
+  if (parent) {
+    presetController.destroy();
+    presetController = parent.add(presetState, 'currentPreset', options.length ? options : ['']).name('Select Preset');
+  }
+}
+
+presetsFolder.add(presetState, 'load').name('Load Preset');
+presetsFolder.add(presetState, 'delete').name('Delete Preset');
+presetsFolder.add(presetState, 'presetName').name('New Name');
+presetsFolder.add(presetState, 'save').name('Save Preset');
+presetsFolder.open();
 
 // ── Camera controls ───────────────────────────────────────────────────────────
 const orbit = new OrbitControls(camera, renderer.domElement);

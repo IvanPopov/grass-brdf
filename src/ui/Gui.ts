@@ -327,57 +327,11 @@ export function buildGui(
     'Narrower blades → broader, softer hot-spot lobe.',
   );
 
-  const leafOpt = grass.addFolder('Leaf optics (linear sRGB)');
-  leafOpt.close();
+  const soilOpt = grass.addFolder('Soil (linear sRGB)');
+  soilOpt.close();
 
   tip(
-    leafOpt.add(grassParams, 'bladeAlbedoR', 0.0, 0.3, 0.005)
-      .name('Blade ρ  R')
-      .onChange(onGrassChange),
-    'Blade reflectance ρ_leaf, red channel (linear, not gamma).\n' +
-    'LOPEX93 database for Lolium perenne: ≈ 0.045.\n' +
-    'Natural grass is dark in red — chlorophyll absorption.',
-  );
-  tip(
-    leafOpt.add(grassParams, 'bladeAlbedoG', 0.0, 0.4, 0.005)
-      .name('Blade ρ  G')
-      .onChange(onGrassChange),
-    'Blade reflectance ρ_leaf, green channel (linear).\n' +
-    'LOPEX93: ≈ 0.115.  This is the primary green appearance driver.',
-  );
-  tip(
-    leafOpt.add(grassParams, 'bladeAlbedoB', 0.0, 0.2, 0.005)
-      .name('Blade ρ  B')
-      .onChange(onGrassChange),
-    'Blade reflectance ρ_leaf, blue channel (linear).\n' +
-    'LOPEX93: ≈ 0.025.  Low due to chlorophyll a absorption.',
-  );
-
-  tip(
-    leafOpt.add(grassParams, 'bladeTransmittanceR', 0.0, 0.2, 0.005)
-      .name('Blade τ  R')
-      .onChange(onGrassChange),
-    'Blade transmittance τ_leaf, red channel.\n' +
-    'PROSPECT calibration: ≈ 0.015.  Thin blades transmit some red.',
-  );
-  tip(
-    leafOpt.add(grassParams, 'bladeTransmittanceG', 0.0, 0.3, 0.005)
-      .name('Blade τ  G')
-      .onChange(onGrassChange),
-    'Blade transmittance τ_leaf, green channel.\n' +
-    'PROSPECT: ≈ 0.045.  Highest channel — green glow of backlit grass.\n' +
-    'ω = ρ + τ is the single-scattering albedo used in canopy scattering.',
-  );
-  tip(
-    leafOpt.add(grassParams, 'bladeTransmittanceB', 0.0, 0.15, 0.005)
-      .name('Blade τ  B')
-      .onChange(onGrassChange),
-    'Blade transmittance τ_leaf, blue channel.\n' +
-    'PROSPECT: ≈ 0.010.',
-  );
-
-  tip(
-    leafOpt.add(grassParams, 'soilAlbedoR', 0.0, 0.4, 0.005)
+    soilOpt.add(grassParams, 'soilAlbedoR', 0.0, 0.4, 0.005)
       .name('Soil ρ  R')
       .onChange(onGrassChange),
     'Soil / infill diffuse reflectance, red channel (linear).\n' +
@@ -385,14 +339,14 @@ export function buildGui(
     'Rubber crumb infill (artificial): 0.03–0.06.',
   );
   tip(
-    leafOpt.add(grassParams, 'soilAlbedoG', 0.0, 0.4, 0.005)
+    soilOpt.add(grassParams, 'soilAlbedoG', 0.0, 0.4, 0.005)
       .name('Soil ρ  G')
       .onChange(onGrassChange),
     'Soil diffuse reflectance, green channel (linear).\n' +
     'Moist sandy loam: ≈ 0.075.',
   );
   tip(
-    leafOpt.add(grassParams, 'soilAlbedoB', 0.0, 0.3, 0.005)
+    soilOpt.add(grassParams, 'soilAlbedoB', 0.0, 0.3, 0.005)
       .name('Soil ρ  B')
       .onChange(onGrassChange),
     'Soil diffuse reflectance, blue channel (linear).\n' +

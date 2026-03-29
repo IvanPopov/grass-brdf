@@ -20,7 +20,6 @@ export interface CrushMapSample {
  * X along pitch length, Z across width.
  */
 export function sampleCrushMap(worldX: number, worldZ: number, p: GrassBRDFParams): CrushMapSample {
-  void worldZ;
   if (!p.mowArtMowingEnabled) {
     const w = THREE.MathUtils.clamp(p.mowBend, 0, 1);
     return {
@@ -30,15 +29,32 @@ export function sampleCrushMap(worldX: number, worldZ: number, p: GrassBRDFParam
       leanSign: 1,
     };
   }
+
+  // High frequency but low amplitude noise, creating a softer, blurred organic boundary
+  const edgeNoise = (Math.sin(worldZ * 18.3 + worldX * 3.0) * 0.5 + 
+                     Math.sin(worldZ * 29.1 - worldX * 2.0) * 0.3 + 
+                     Math.sin(worldZ * 9.7) * 0.7) * 0.08;
+  const noisyX = worldX + edgeNoise;
+
   const sw = Math.max(0.01, p.mowArtStripeWidthM);
-  const stripeIdx = Math.floor(worldX / sw);
+  const stripeIdx = Math.floor(noisyX / sw);
   const alt = stripeIdx % 2 === 0 ? -1 : 1;
   const leanSign = p.mowArtStripesEnabled ? alt : 1;
   const stripePhase = p.mowArtStripesEnabled ? (stripeIdx % 2 === 0 ? 0 : 1) : 0;
   const rMod = p.mowArtStripesEnabled
     ? THREE.MathUtils.lerp(1.0 - 0.08 * p.mowArtStripeBendVariation, 1.0, stripePhase)
     : 1.0;
-  const w = THREE.MathUtils.clamp(p.mowBend * rMod, 0, 1);
+  
+  // Calculate distance to the stripe boundary to add wheel/overlap crush
+  let localX = noisyX % sw;
+  if (localX < 0) localX += sw;
+  const distToEdge = Math.min(localX, sw - localX);
+  
+  // Smooth wheel track / overlap line on both sides of the stripe (left and right edges)
+  const edgeCrushRaw = Math.max(0, 1.0 - distToEdge / 0.4);
+  const edgeCrush = edgeCrushRaw * edgeCrushRaw * (3.0 - 2.0 * edgeCrushRaw) * 0.06;
+
+  const w = THREE.MathUtils.clamp(p.mowBend * rMod + edgeCrush, 0, 1);
   return {
     w,
     coherence: THREE.MathUtils.clamp(p.mowCoherence, 0, 1),

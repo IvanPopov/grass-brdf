@@ -54,11 +54,12 @@ uniform float     mowMaxTiltRad;
 uniform float microShadowIntensity;
 
 // ── Leaf optical properties [linear sRGB, 0–1] ───────────────────────────────
-// bladeAlbedo: per-leaf reflectance ρ_leaf.
-// bladeTau:    per-leaf transmittance τ_leaf.  Single-scattering albedo ω = ρ+τ.
-// soilAlbedo:  soil/infill diffuse reflectance ρ_soil.
-uniform vec3 bladeAlbedo;
-uniform vec3 bladeTau;
+// bladeAlbedoMap / bladeTauMap: per-texel ρ_leaf and τ_leaf (same UV as crush map).
+// bladeUserDetailMap: optional grayscale from disk; R channel multiplies albedo and tau (1 = identity).
+// soilAlbedo:  soil/infill diffuse reflectance ρ_soil (still uniform).
+uniform sampler2D bladeAlbedoMap;
+uniform sampler2D bladeTauMap;
+uniform sampler2D bladeUserDetailMap;
 uniform vec3 soilAlbedo;
 
 // ── Cuticle specular ─────────────────────────────────────────────────────────
@@ -432,7 +433,9 @@ vec3 evaluateGrassBRDF(
     float w_dir,
     float microStampW,
     float spreadB,
-    float bladeH
+    float bladeH,
+    vec3 bladeAlbedoLeaf,
+    vec3 bladeTauLeaf
 ) {
 
     // Surface normal is horizontal.
@@ -483,7 +486,7 @@ vec3 evaluateGrassBRDF(
     // and would cause ms_denom = 1 − ω·(1−G_eff) to go negative, yielding
     // an unbounded rho_ms.  The GUI sliders currently limit ω_G ≤ 0.7, so this
     // clamp is a safety guard for future parameter changes, not an active fix.
-    vec3 omega   = clamp(bladeAlbedo + bladeTau, vec3(0.0), vec3(1.0));
+    vec3 omega   = clamp(bladeAlbedoLeaf + bladeTauLeaf, vec3(0.0), vec3(1.0));
     vec3 ss_term = omega * (G_i * G_v * T_att * NdotL / max(denom_ss, 0.001)) * Chs;
 
     // ── 4. Soil background ────────────────────────────────────────────────────
@@ -671,12 +674,17 @@ void main() {
         float M = campbellM(chiLAD);
 
         vec2 mapUv = vec2(vWorldPos.x / fieldSize.x + 0.5, vWorldPos.z / fieldSize.y + 0.5);
-        vec4 m = sampleCrushMapRgbLinearANearest(crushMap, mapUv);
-        float w_map = clamp(m.r, 0.0, 1.0);
-        float coherence = clamp(m.g, 0.0, 1.0);
-        float spread_map = clamp(m.b, 0.0, 1.0);
-        float leanSign = m.a * 2.0 - 1.0;
-        float wStampMicro = textureLod(trampStampMap, mapUv, 0.0).r;
+        vec4 crush = sampleCrushMapRgbLinearANearest(crushMap, mapUv);
+        float w_map = clamp(crush.r, 0.0, 1.0);
+        float coherence = clamp(crush.g, 0.0, 1.0);
+        float spread_map = clamp(crush.b, 0.0, 1.0);
+        float leanSign = crush.a * 2.0 - 1.0;
+        float wStampMicro = texture(trampStampMap, mapUv).r;
+        vec3 albBase = texture(bladeAlbedoMap, mapUv).rgb;
+        vec3 tauBase = texture(bladeTauMap, mapUv).rgb;
+        float bladeMask = texture(bladeUserDetailMap, mapUv).r;
+        vec3 bladeAlbedoLeaf = albBase * bladeMask;
+        vec3 bladeTauLeaf = tauBase * bladeMask;
 
         float meadowTilt = bladeCampbellMeanTiltRad;
         float effectiveTilt = mix(meadowTilt, mowMaxTiltRad, w_map);
@@ -707,7 +715,9 @@ void main() {
                 coherence,
                 wStampMicro,
                 spread_map,
-                bladeHeightM
+                bladeHeightM,
+                bladeAlbedoLeaf,
+                bladeTauLeaf
             ) * lightColor;
         }
 

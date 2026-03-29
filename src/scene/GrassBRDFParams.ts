@@ -616,6 +616,27 @@ export interface GrassBRDFParams {
   trampFalloffPower: number;
   /** RNG seed for reproducible paths. */
   trampSeed: number;
+
+  // ---------------------------------------------------------------------------
+  // Field markings
+  // ---------------------------------------------------------------------------
+
+  /** Enable drawing of football pitch lines directly onto the albedo and transmittance maps. */
+  markingsEnabled: boolean;
+  /** Width of the lines [m] (FIFA standard is typically 0.12 m). */
+  markingsLineWidth: number;
+  /** Paint albedo R (linear sRGB) */
+  markingsAlbedoR: number;
+  /** Paint albedo G (linear sRGB) */
+  markingsAlbedoG: number;
+  /** Paint albedo B (linear sRGB) */
+  markingsAlbedoB: number;
+  /** Paint transmittance R (linear sRGB) */
+  markingsTransmittanceR: number;
+  /** Paint transmittance G (linear sRGB) */
+  markingsTransmittanceG: number;
+  /** Paint transmittance B (linear sRGB) */
+  markingsTransmittanceB: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -721,15 +742,15 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   // [Koch09] macro-scale: across-blade σ/Λ ≈ 0.50–0.70, median 0.60
   alphaB: 0.60,
 
-  // Uniform meadow base (no mowed tilt in map R); mowing layout off until re-enabled in GUI.
-  mowBend:               0.0,
-  mowCoherence:          0.78,
-  mowSpread:             0.18,
-  mowMaxTiltDeg:         68.0,
-  mowArtMowingEnabled:   false,
-  mowArtStripeWidthM:    5.4,
-  mowArtStripesEnabled:  false,
-  mowArtStripeBendVariation: 0.75,
+  // Default mowing layout: wide stripes, alternating lean; bend/coherence kept low for subtle tilt.
+  mowBend:               0.06,
+  mowCoherence:          0.06,
+  mowSpread:             0.5,
+  mowMaxTiltDeg:         80.0,
+  mowArtMowingEnabled:   true,
+  mowArtStripeWidthM:    8.8,
+  mowArtStripesEnabled:  true,
+  mowArtStripeBendVariation: 0.5,
 
   microShadowIntensity: 0.95,
 
@@ -751,4 +772,14 @@ export const DEFAULT_GRASS_BRDF: GrassBRDFParams = {
   trampSpread:           0.12,
   trampFalloffPower:     1.45,
   trampSeed:             0x3a71c407,
+
+  // Field markings
+  markingsEnabled:       true,
+  markingsLineWidth:     0.12,
+  markingsAlbedoR:       0.60,
+  markingsAlbedoG:       0.60,
+  markingsAlbedoB:       0.60,
+  markingsTransmittanceR: 0.0,
+  markingsTransmittanceG: 0.0,
+  markingsTransmittanceB: 0.0,
 };
